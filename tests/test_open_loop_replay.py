@@ -171,6 +171,27 @@ def test_a_price_dataset_without_raw_prices_or_adjusted_closes_is_refused(
     assert not (tmp_path / "trader").exists()
 
 
+def test_a_membership_masked_price_dataset_is_refused(tmp_path):
+    # quantlab's sp500 examples' members.zarr: adjusted columns, close and
+    # volume only, NaN where the PERMNO is not a member (10003 leaves after bar 2).
+    member = {10001: [True] * 6, 10002: [True] * 6, 10003: [True] * 3 + [False] * 3}
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", BARS, OPEN, CLOSE, WEIGHTS, member=member
+    )
+    config = TraderConfig(
+        quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
+        output_dir=str(tmp_path / "trader"),
+    )
+
+    with pytest.raises(ValueError) as refused:
+        run(config)
+    message = str(refused.value)
+    assert "unmasked market dataset" in message
+    assert "StockDataset" in message
+    assert "['open', 'splitFactor', 'cumfacshr', 'divCash']" in message
+    assert not (tmp_path / "trader").exists()
+
+
 def test_the_cli_replays_a_quantlab_run_and_prints_the_run_directory(tmp_path, capsys):
     from quantlab_trader.cli import main
 

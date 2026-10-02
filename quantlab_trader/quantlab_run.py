@@ -48,6 +48,10 @@ US_EQUITY_SESSION_MINUTES = 390
 #: close (sizing and the equity mark), the adjusted close (decision prices,
 #: ADR 0002), and the corporate-action fields the backtest venue books splits,
 #: value distributions and dividends from (ADR 0009).
+#: A membership-masked derived store (adjusted columns, NaN off-membership)
+#: has no raw open or corporate-action fields, so this check is the refusal of
+#: a price dataset that is not an unmasked market dataset (ADR 0006); trader
+#: does not scan NaN patterns for masking.
 REQUIRED_PRICE_VARIABLES: tuple[str, ...] = (
     "open",
     "close",
@@ -120,7 +124,8 @@ class QuantlabRun:
         ValueError
             If ``run_dir`` has no ``config.json``, it has no ``market`` block, the price dataset is
             not a ``MarketDataset``, or its store lacks any of
-            ``REQUIRED_PRICE_VARIABLES``.
+            ``REQUIRED_PRICE_VARIABLES``, as a membership-masked derived
+            store does (ADR 0006).
         """
         run_dir = Path(run_dir).resolve()
         if not (run_dir / "config.json").is_file():
@@ -145,9 +150,12 @@ class QuantlabRun:
         if missing:
             raise ValueError(
                 f"quantlab run {run_dir}: the price dataset "
-                f"{type(dataset).__name__} lacks {missing}; trader executes on raw "
-                f"open/close, decides on adjClose (ADR 0002) and books corporate "
-                f"actions from splitFactor, cumfacshr and divCash (ADR 0009)"
+                f"{type(dataset).__name__} lacks {missing}; it must be an unmasked "
+                f"market dataset (membership masks predictions, never prices, so "
+                f"not a membership-masked derived store; ADR 0006) "
+                f"with raw open/close to execute on, adjClose to decide on (ADR 0002) "
+                f"and splitFactor, cumfacshr and divCash to book corporate actions "
+                f"from (ADR 0009)"
             )
         return cls(
             run_dir=run_dir,

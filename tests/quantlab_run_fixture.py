@@ -18,6 +18,12 @@ valuation prices from ``bar_before(first, lookback_bars)``,
 carrying the rule (so ``config.json`` records it), and the panel written as
 the run's ``predictions.zarr``.
 
+``build_quantlab_run(member=...)`` instead runs on a membership-masked
+derived store, the way quantlab's ``sp500_*`` examples build
+``members.zarr``: the CRSP panel's ``adj*``, ``close`` and ``volume``
+columns, NaN where the PERMNO is not a member, read by a ``StockDataset``.
+trader refuses such a run (ADR 0006).
+
 Later tickets extend the fixture by passing their own raw prices and
 variables (``variables=``: a split, a dividend, a halt, a delisting) and
 their own table (``weights=``); ``adjusted_scale`` keeps the adjusted group a
@@ -39,12 +45,14 @@ from quantlab.backtest.selection import rebalance_mask
 from quantlab.base.config import (
     CrossSectionBacktestConfig,
     CrspDatasetConfig,
+    DatasetConfig,
     WeightsBacktestConfig,
 )
 from quantlab.base.data import InsufficientHistoryError
 from quantlab.base.portfolio import LabelSpec, PortfolioConstructor, PredictionPanel
 from quantlab.base.tracking import Tracker
 from quantlab.dataset.crsp import CrspStockDataset
+from quantlab.dataset.stock import StockDataset
 
 #: The adjusted group is the raw group times this, so a raw/adjusted mix-up
 #: changes every number a test checks.
@@ -117,18 +125,24 @@ def build_quantlab_run(
     drop_variables: Sequence[str] = (),
     benchmark: tuple[Mapping[int, Sequence[float]], Mapping[int, Sequence[float]]] | None = None,
     tracker: Tracker | None = None,
+    member: Mapping[int, Sequence[bool]] | None = None,
 ) -> Path:
     """Write a CRSP-shaped store and a quantlab weights run on it; return the run dir.
 
     ``weights`` is the rebalance table per PERMNO over ``bars`` (NaN keeps
     the holding); every PERMNO of ``close`` must be in it. ``benchmark`` is
     the raw ``(open, close)`` of one PERMNO, written to its own store and
-    bought and held by the run; ``tracker`` is the run's tracker.
+    bought and held by the run; ``tracker`` is the run's tracker. With
+    ``member`` (per PERMNO and bar), the run's price dataset is instead a
+    membership-masked ``StockDataset`` derived from the store (quantlab's
+    examples' ``members.zarr``), which trader refuses (ADR 0006).
     """
     root = Path(root)
     dataset = _crsp_dataset(
         root, bars, open_, close, variables=variables, drop_variables=drop_variables
     )
+    if member is not None:
+        dataset = _members_dataset(root, dataset, member)
     start, end = (b.strftime("%Y-%m-%d") for b in (bars[0], bars[-1]))
     permnos = sorted(close)
     table = xr.DataArray(
@@ -157,6 +171,41 @@ def build_quantlab_run(
         )
     )
     return Path(backtester.run_weights(table).run_dir)
+
+
+#: The columns quantlab's ``sp500_*`` examples keep in their derived stores
+#: (less ``ret``, which the fixture store does not have).
+MEMBERS_COLUMNS = ("adjOpen", "adjHigh", "adjLow", "adjClose", "adjVolume", "close", "volume")
+
+
+def _members_dataset(
+    root: Path, crsp: CrspStockDataset, member: Mapping[int, Sequence[bool]]
+) -> StockDataset:
+    """Derive a members-style store from ``crsp`` and return the ``StockDataset`` reading it.
+
+    The store is the panel's ``MEMBERS_COLUMNS``, NaN where ``member`` is
+    False, as quantlab's ``sp500_*`` examples write ``members.zarr``.
+    """
+    start, end = crsp.config.start_date, crsp.config.end_date
+    prices = crsp.panel(start, end)[list(MEMBERS_COLUMNS)].load()
+    permnos = prices["symbol"].values
+    mask = xr.DataArray(
+        np.array([member[p] for p in permnos], dtype=bool).T,
+        dims=("timestamp", "symbol"),
+        coords={"timestamp": prices["timestamp"], "symbol": permnos},
+    )
+    path = root / "members.zarr"
+    prices.where(mask).to_zarr(path, mode="w")
+    return StockDataset(
+        DatasetConfig(
+            zarr_file_path=str(path),
+            raw_data_dir_path=str(root / "raw"),
+            market="us_equity",
+            frequency="1d",
+            start_date=start,
+            end_date=end,
+        )
+    )
 
 
 def _crsp_dataset(root: Path, bars, open_, close, **store) -> CrspStockDataset:

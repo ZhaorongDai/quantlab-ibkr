@@ -26,7 +26,12 @@ call (TopN sells it at the next open, mean-variance holds it at mu=0), as it wou
 
 trader feeds bars for the whole window to every instrument (one per PERMNO with a finite
 prediction, ADR 0004), member or not on a given day. It refuses a run whose price dataset is not a
-`MarketDataset` or lacks `open`, `close`, `adjClose`, `splitFactor` or `divCash`.
+`MarketDataset` or lacks `open`, `close`, `adjClose`, `splitFactor`, `cumfacshr` or `divCash`.
+That variable check is also how a membership-masked derived store (the examples' `members.zarr`:
+`adj*`, `close`, `volume`, NaN off-membership) is refused: it has no raw open and no
+corporate-action fields, and the refusal names what is missing and asks for an unmasked market
+dataset. trader does not look for masking in the data (no scan of NaN patterns); a masked store
+that kept every required variable would pass the check (#30).
 
 ## Why
 
