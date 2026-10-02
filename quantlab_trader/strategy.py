@@ -19,7 +19,7 @@ from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy
 
 from quantlab_trader.account import derived_cash, holdings
-from quantlab_trader.base.venue import CORPORATE_ACTION_TAG, NextOpenOrder, Venue
+from quantlab_trader.base.venue import NextOpenOrder, Venue, corporate_action_kind
 from quantlab_trader.decision import DecisionCycle
 
 if TYPE_CHECKING:
@@ -99,12 +99,10 @@ class PortfolioStrategy(Strategy):
         the venue booked it on the strategy's position for a corporate
         action, so it is recorded in the run's events, never as an order.
         """
-        order = self.cache.order(event.client_order_id)
-        prefix = CORPORATE_ACTION_TAG + "_"
-        kinds = [tag[len(prefix):] for tag in (order.tags or ()) if tag.startswith(prefix)]
-        if kinds:
+        kind = corporate_action_kind(self.cache.order(event.client_order_id).tags)
+        if kind is not None:
             self.recorder.corporate_action(
-                kinds[0],
+                kind,
                 ts_ns=event.ts_event,
                 permno=self.venue.resolver.permno(event.instrument_id),
                 side=event.order_side.name,

@@ -135,7 +135,24 @@ class RunRecorder:
         price: float,
         fee: float,
     ) -> None:
-        """Record a venue fill of a corporate action (``DELIST``, ...) as an event."""
+        """Record a venue fill of a corporate action as an event, never as an order.
+
+        Parameters
+        ----------
+        action : str
+            The kind, from the fill's ``CORPORATE_ACTION_<KIND>`` tag (``DELIST``).
+        ts_ns : int
+            The fill's UNIX nanoseconds; the event is dated in the market's time zone.
+        permno : Hashable
+            The security.
+        side : {"BUY", "SELL"}
+        quantity : int
+            Shares filled.
+        price : float
+            The fill price.
+        fee : float
+            The commission charged, zero under every trader fee model.
+        """
         self._events.append(
             {
                 "type": "corporate_action",

@@ -5,7 +5,7 @@ from __future__ import annotations
 from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.model.objects import Money
 
-from quantlab_trader.base.venue import CORPORATE_ACTION_TAG
+from quantlab_trader.base.venue import corporate_action_kind
 
 
 def is_fee_free(order) -> bool:
@@ -14,11 +14,18 @@ def is_fee_free(order) -> bool:
     Corporate-action venue fills (``CORPORATE_ACTION_*``, ADR 0009) and
     nautilus's own expiration settlements (``EXPIRATION_*_CLOSE``) move no
     commission.
+
+    Examples
+    --------
+    >>> from types import SimpleNamespace
+    >>> is_fee_free(SimpleNamespace(tags=["CORPORATE_ACTION_DELIST"]))
+    True
+    >>> is_fee_free(SimpleNamespace(tags=None))
+    False
     """
-    return any(
-        tag.startswith(CORPORATE_ACTION_TAG)
-        or (tag.startswith("EXPIRATION_") and tag.endswith("_CLOSE"))
-        for tag in order.tags or ()
+    tags = order.tags or ()
+    return corporate_action_kind(tags) is not None or any(
+        tag.startswith("EXPIRATION_") and tag.endswith("_CLOSE") for tag in tags
     )
 
 

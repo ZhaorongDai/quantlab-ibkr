@@ -92,25 +92,27 @@ class BacktestDecisionSource(DecisionSource):
         The last raw close times the valuation's return since that close; the
         last raw close itself where the valuation cannot say.
         """
+        # Both from the same bar: the last one with a raw close and a valuation.
+        paired = raw_close.notna() & valuation.notna()
         last_close = raw_close.ffill()
-        valuation_at_last_close = valuation.where(raw_close.notna()).ffill()
-        grown = last_close * valuation / valuation_at_last_close
-        value = grown.where(np.isfinite(grown) & (grown > 0), last_close)
+        grown = raw_close.where(paired).ffill() * valuation / valuation.where(paired).ffill()
+        # A total-loss delisting (valuation 0) settles at 0, not at the last close.
+        value = grown.where(np.isfinite(grown) & (grown >= 0), last_close)
         return value.round(PRICE_PRECISION)
 
     def _delisting_settlements(self, last_value: pd.DataFrame) -> tuple[DelistingSettlement, ...]:
         """Return the settlement of every delisting bar that has a next bar in the window."""
         settlements = []
-        bars, symbols = np.nonzero(self._delisted.to_numpy())
-        for b, s in sorted(zip(bars, symbols)):
-            price = last_value.iat[b, s]
-            if b + 1 >= len(self._calendar) or not np.isfinite(price):
+        bars, columns = np.nonzero(self._delisted.to_numpy())
+        for bar, column in sorted(zip(bars, columns)):
+            price = last_value.iat[bar, column]
+            if bar + 1 >= len(self._calendar) or not np.isfinite(price):
                 continue
             settlements.append(
                 DelistingSettlement(
-                    permno=self._delisted.columns[s],
-                    delisting_date=self._calendar[b],
-                    settlement_date=self._calendar[b + 1],
+                    permno=self._delisted.columns[column],
+                    delisting_date=self._calendar[bar],
+                    settlement_date=self._calendar[bar + 1],
                     price=float(price),
                 )
             )

@@ -43,7 +43,7 @@ import xarray as xr
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.runner import run
 from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
-from tests.quantlab_run_fixture import ADJUSTED_SCALE, build_quantlab_run
+from tests.quantlab_run_fixture import ADJUSTED_SCALE, build_quantlab_run, write_crsp_store
 
 NAN = np.nan
 BARS = pd.bdate_range("2024-01-02", periods=6)
@@ -150,3 +150,29 @@ def test_equity_is_cash_plus_holdings_through_the_halt_and_the_delisting(replay)
         rtol=0,
         atol=1e-9,
     )
+
+
+def test_a_total_loss_delisting_settles_at_zero(tmp_path):
+    # A -100% delisting return: the delisting row's adjusted close is 0.
+    # quantlab's vectorbt engine refuses to settle at a price of 0, so the
+    # run is built on the -30% store and the store is then rewritten.
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", BARS, OPEN, CLOSE, WEIGHTS,
+        variables={"adjClose": ADJ_CLOSE},
+    )
+    write_crsp_store(
+        tmp_path / "quantlab" / "crsp.zarr", BARS, OPEN, CLOSE,
+        variables={"adjClose": {**ADJ_CLOSE, 10002: [10.0, 10.5, 11.0, 11.5, 0.0, NAN]}},
+    )
+    run_dir = run(
+        TraderConfig(
+            quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
+            output_dir=str(tmp_path / "trader"),
+        )
+    )
+
+    [settlement] = _events(run_dir, "corporate_action")
+    assert (settlement["quantity"], settlement["price"], settlement["fee"]) == (250, 0.0, 0.0)
+    equity = xr.open_zarr(run_dir / "equity.zarr").load()["value"].values
+    # Bar 4: -310.30 + 500*14 + 250*0; bar 5: cash after selling 500 at 14.5 less 7.25.
+    np.testing.assert_allclose(equity[4:], [6_689.70, 6_932.45], rtol=0, atol=1e-9)

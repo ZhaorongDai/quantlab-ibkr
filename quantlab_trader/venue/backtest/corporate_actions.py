@@ -14,11 +14,18 @@ charges nothing for it.
 
 Booked so far: the delisting settlement (quantlab ADR 0014), closing a
 delisted holding at its last valuation on the bar after its delisting bar.
+
+nautilus runs a module only on timestamps that carry data, so an action
+falls due at the first data timestamp at or after 09:30: on a bar where no
+instrument has an opening print it is booked at that bar's close instead.
+Nothing is lost: the delisted security itself has no opening print after its
+delisting bar, so no next-open order on it can fill before the settlement.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections import deque
 from collections.abc import Sequence
 
 from nautilus_trader.backtest.config import SimulationModuleConfig
@@ -48,24 +55,23 @@ class CorporateActionModule(SimulationModule):
 
     def __init__(self, delistings: Sequence[DelistingSettlement], resolver: BacktestResolver):
         super().__init__(SimulationModuleConfig())
-        self._actions = sorted(
-            (
-                (
-                    session_ns(settlement.settlement_date, OPEN_TIME),
-                    resolver.instrument_id(settlement.permno, settlement.delisting_date),
-                    settlement.price,
-                )
-                for settlement in delistings
-            ),
-            key=lambda action: action[0],
+        self._resolver = resolver
+        self._delistings = deque(
+            sorted(delistings, key=lambda settlement: settlement.settlement_date)
         )
 
     def process(self, ts_now: int) -> None:
-        """Book every action due at or before ``ts_now``."""
-        while self._actions and self._actions[0][0] <= ts_now:
-            _, instrument_id, price = self._actions.pop(0)
+        """Book every action due at or before ``ts_now`` (09:30 ET of its day)."""
+        while (
+            self._delistings
+            and session_ns(self._delistings[0].settlement_date, OPEN_TIME) <= ts_now
+        ):
+            settlement = self._delistings.popleft()
+            instrument_id = self._resolver.instrument_id(
+                settlement.permno, settlement.delisting_date
+            )
             for position in self.cache.positions_open(None, instrument_id):
-                self._settle(position, price)
+                self._settle(position, settlement.price)
 
     def _settle(self, position, price: float) -> None:
         """Close ``position`` at ``price``: the delisting settlement."""
@@ -106,7 +112,7 @@ class CorporateActionModule(SimulationModule):
             [(Price(price, PRICE_PRECISION), Quantity(quantity, 0))],
             LiquiditySide.TAKER,
             None,
-            self.cache.position(position.id),
+            position,
         )
 
     def log_diagnostics(self, logger) -> None:

@@ -37,6 +37,15 @@ def session_ns(dates: pd.DatetimeIndex | pd.Timestamp, time: pd.Timedelta):
     return stamps.tz_convert("UTC").as_unit("ns").asi8
 
 
+def opening_prints(prices: xr.Dataset) -> pd.DataFrame:
+    """Return which bars carry an opening print of each security: a finite raw open.
+
+    Booleans on ``(timestamp, symbol)``, the rule ``build_feed`` emits
+    opening prints by.
+    """
+    return prices["open"].transpose("timestamp", "symbol").to_pandas().apply(np.isfinite)
+
+
 def build_feed(prices: xr.Dataset, resolver: BacktestResolver) -> list:
     """Return the feed's ticks and bars for every resolved instrument.
 
@@ -56,10 +65,12 @@ def build_feed(prices: xr.Dataset, resolver: BacktestResolver) -> list:
     """
     dates = pd.DatetimeIndex(prices["timestamp"].values)
     open_ns, close_ns = session_ns(dates, OPEN_TIME), session_ns(dates, CLOSE_TIME)
+    printed = opening_prints(prices)
     data: list = []
     for instrument in resolver.instruments():
         permno = resolver.permno(instrument.id)
         row = prices.sel(symbol=permno)
+        has_open = printed[permno].to_numpy()
         opens, closes = row["open"].values, row["close"].values
         highs, lows = np.fmax(opens, closes), np.fmin(opens, closes)
         if "high" in row:
@@ -68,7 +79,7 @@ def build_feed(prices: xr.Dataset, resolver: BacktestResolver) -> list:
             lows = np.fmin(row["low"].values, lows)
         bar_type = BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL")
         for i in range(len(dates)):
-            if np.isfinite(opens[i]):
+            if has_open[i]:
                 data.append(_print(instrument.id, opens[i], f"{permno}-{i}-O", open_ns[i]))
             if np.isfinite(closes[i]):
                 data.append(_print(instrument.id, closes[i], f"{permno}-{i}-C", close_ns[i]))

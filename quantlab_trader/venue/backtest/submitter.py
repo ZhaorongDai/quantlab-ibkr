@@ -75,9 +75,9 @@ class BacktestOpenSubmitter(OpenSubmitter):
         An order whose security had no opening print on ``bar`` is reported
         unfilled instead.
         """
-        printed = self._opening_prints.loc[bar]
+        opens_on_bar = self._opening_prints.loc[bar]
         for order in orders:
-            if printed.get(order.permno, False):
+            if opens_on_bar.get(order.permno, False):
                 self._strategy.submit_next_open(order, TimeInForce.DAY)
             else:
                 self._strategy.on_next_open_unfilled(

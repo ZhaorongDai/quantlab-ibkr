@@ -41,6 +41,28 @@ MARKET_TZ = "America/New_York"
 CORPORATE_ACTION_TAG = "CORPORATE_ACTION"
 
 
+def corporate_action_kind(tags) -> str | None:
+    """Return the corporate action an order's tags mark it with, or ``None``.
+
+    Parameters
+    ----------
+    tags : Iterable of str or None
+        An order's tags.
+
+    Examples
+    --------
+    >>> corporate_action_kind(["CORPORATE_ACTION_DELIST"])
+    'DELIST'
+    >>> corporate_action_kind(["CORPORATE_ACTIONS"]) is None
+    True
+    """
+    prefix = CORPORATE_ACTION_TAG + "_"
+    for tag in tags or ():
+        if tag.startswith(prefix):
+            return tag[len(prefix):]
+    return None
+
+
 @dataclass(frozen=True)
 class DecisionInputs:
     """What one decision cycle may know at the close of bar t.
