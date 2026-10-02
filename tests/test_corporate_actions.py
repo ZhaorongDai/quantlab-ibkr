@@ -308,3 +308,30 @@ def test_a_split_after_a_halt_with_a_dividend_and_an_order_rescaled_to_nothing(t
     sale = _orders(run_dir).query("symbol == 10002 and side == 'SELL'").iloc[0]
     assert (sale["quantity"], sale["status"], sale["filled_quantity"]) == (2, "unfilled", 0)
     assert "0 shares" in sale["reason"]
+
+
+def test_metrics_report_dividends_splits_and_distributions_under_execution_trader(replay):
+    metrics = json.loads((replay / "metrics.json").read_text())
+
+    trader = metrics["execution"]["trader"]
+    # Dividends 100 - 93.70 + 50; cash in lieu -5 + 84; one spin-off of 4 200.
+    assert trader["dividends"] == {"count": 3, "amount": pytest.approx(56.30)}
+    assert trader["cash_in_lieu"] == {"count": 2, "amount": pytest.approx(79.0)}
+    assert trader["value_distributions"] == {"count": 1, "amount": pytest.approx(4200.0)}
+    # 10001 +400, 10003 -312 (a short), 10002 -334.
+    assert trader["splits"] == {"count": 3, "share_change": 400 - 312 - 334}
+    assert trader["commissions"] == pytest.approx(90.0 + 21.20)
+    assert trader["minimum_fee_hits"] == 0
+    assert trader["peak_cash_debit"] == 0.0
+    settled = [
+        (s["symbol"], s["delisting_timestamp"][:10], s["settlement_timestamp"][:10], s["price"])
+        for s in metrics["execution"]["settlements"]
+    ]
+    assert settled == [
+        ("10006", "2024-01-08", "2024-01-09", 8.40),
+        ("10005", "2024-01-10", "2024-01-11", 23.65),
+    ]
+    whole = metrics["whole"]
+    # Six round trips; 10001 (sold after its split), 10006 and 10005 closed.
+    assert (whole["Total Trades"], whole["Total Closed Trades"], whole["Total Open Trades"]) == (6, 3, 3)
+    assert whole["Total Orders"] == 7

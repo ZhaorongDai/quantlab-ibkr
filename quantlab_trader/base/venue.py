@@ -212,3 +212,12 @@ class Venue(ABC):
     @abstractmethod
     def run(self, strategy: PortfolioStrategy) -> None:
         """Build and run the engine (backtest) or node (live) around ``strategy``."""
+
+    def is_minimum_fee(self, quantity: int, price: float) -> bool:
+        """Return whether a fill of ``quantity`` shares at ``price`` paid the minimum commission.
+
+        Counted in a trader run's ``execution.trader.minimum_fee_hits``. The
+        default (a venue without a minimum) is ``False``; the backtest venue
+        asks its fee model, a live venue the broker's schedule.
+        """
+        return False

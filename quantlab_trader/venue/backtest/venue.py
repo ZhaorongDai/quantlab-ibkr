@@ -230,6 +230,12 @@ class BacktestVenue(Venue):
         )
         self.clock = BacktestDecisionClock(calendar)
 
+    def is_minimum_fee(self, quantity: int, price: float) -> bool:
+        """Return whether the fee model charges a fill of ``quantity`` at ``price`` its minimum."""
+        return isinstance(self.fee_model, IbkrFixedFeeModel) and self.fee_model.minimum_applies(
+            quantity, price
+        )
+
     def run(self, strategy: PortfolioStrategy) -> None:
         """Build the engine, run the window through ``strategy`` and dispose of it."""
         engine = BacktestEngine(

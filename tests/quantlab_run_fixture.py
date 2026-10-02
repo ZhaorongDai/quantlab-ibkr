@@ -43,6 +43,7 @@ from quantlab.base.config import (
 )
 from quantlab.base.data import InsufficientHistoryError
 from quantlab.base.portfolio import LabelSpec, PortfolioConstructor, PredictionPanel
+from quantlab.base.tracking import Tracker
 from quantlab.dataset.crsp import CrspStockDataset
 
 #: The adjusted group is the raw group times this, so a raw/adjusted mix-up
@@ -114,11 +115,15 @@ def build_quantlab_run(
     valuation_price_column: str = "adjClose",
     variables: Mapping[str, Mapping[int, Sequence[float]]] | None = None,
     drop_variables: Sequence[str] = (),
+    benchmark: tuple[Mapping[int, Sequence[float]], Mapping[int, Sequence[float]]] | None = None,
+    tracker: Tracker | None = None,
 ) -> Path:
     """Write a CRSP-shaped store and a quantlab weights run on it; return the run dir.
 
     ``weights`` is the rebalance table per PERMNO over ``bars`` (NaN keeps
-    the holding); every PERMNO of ``close`` must be in it.
+    the holding); every PERMNO of ``close`` must be in it. ``benchmark`` is
+    the raw ``(open, close)`` of one PERMNO, written to its own store and
+    bought and held by the run; ``tracker`` is the run's tracker.
     """
     root = Path(root)
     dataset = _crsp_dataset(
@@ -145,6 +150,10 @@ def build_quantlab_run(
             valuation_price_column=valuation_price_column,
             trading_days_per_year=252,
             session_minutes_per_day=390,
+            benchmark_dataset=None
+            if benchmark is None
+            else _crsp_dataset(root / "benchmark", bars, *benchmark),
+            **({} if tracker is None else {"tracker": tracker}),
         )
     )
     return Path(backtester.run_weights(table).run_dir)

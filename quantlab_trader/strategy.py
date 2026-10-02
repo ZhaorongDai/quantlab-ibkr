@@ -145,11 +145,15 @@ class PortfolioStrategy(Strategy):
                 fee=event.commission.as_double(),
             )
             return
+        quantity = int(event.last_qty.as_double())
+        price = event.last_px.as_double()
         self.recorder.order_filled(
             event.client_order_id.value,
-            price=event.last_px.as_double(),
-            quantity=int(event.last_qty.as_double()),
+            ts_ns=event.ts_event,
+            price=price,
+            quantity=quantity,
             fee=event.commission.as_double(),
+            minimum_fee=self.venue.is_minimum_fee(quantity, price),
         )
 
     def on_order_rejected(self, event) -> None:

@@ -3,7 +3,9 @@
 A quantlab run directory holds the backtest's ``config.json`` (the price
 dataset's config, the window, costs and the ``market`` block naming the fill
 and valuation price columns) and its outputs, among them the rebalance table
-``weights.zarr``, and, for a run with a model, its prediction panel
+``weights.zarr``, its ``metrics.json`` (the in-sample and out-of-sample
+ranges a trader run's metrics are split by), ``equity.zarr`` (the
+benchmark's curve, when the run had one) and, for a run with a model, its prediction panel
 ``predictions.zarr``, from which the run's portfolio construction rule is
 rebuilt (quantlab's ``load_constructor``). trader learns everything about
 the run here, without importing quantlab's backtest layer (which loads
@@ -22,8 +24,25 @@ import xarray as xr
 
 from quantlab.base.data import MarketDataset
 from quantlab.base.portfolio import PortfolioConstructor, PredictionPanel
+from quantlab.base.tracking import NullTracker, Tracker
 from quantlab.portfolio.prediction_panel import load_constructor
-from quantlab.utils.module import load_dataset_from_config
+from quantlab.utils.module import get_cls_from_path, load_dataset_from_config
+
+#: The split keys of a quantlab run's ``metrics.json`` (``run()`` writes the
+#: singular ``in_sample_range`` and ``training_window``, a ``run_cv()`` run the
+#: plural ones under ``stitched``); a ``run_weights()`` run has none.
+SPLIT_KEYS: tuple[str, ...] = (
+    "training_window",
+    "training_windows",
+    "in_sample_range",
+    "in_sample_ranges",
+    "out_of_sample_ranges",
+)
+
+#: The US-equity annualization quantlab's ``US_EQUITY_MARKET`` uses, for a run
+#: whose config does not record its own (only a weights config does).
+US_EQUITY_TRADING_DAYS = 252
+US_EQUITY_SESSION_MINUTES = 390
 
 #: Price variables trader cannot execute without: the raw open (fills) and
 #: close (sizing and the equity mark), the adjusted close (decision prices,
@@ -66,6 +85,8 @@ class QuantlabRun:
         The run's slippage, a fraction of the fill price.
     data_fingerprint : dict or None
         The run's record of the data it read, for a trader run's config.
+    trading_days_per_year, session_minutes_per_day : int
+        The run's annualization: its config's, or US equity's (252, 390).
     """
 
     run_dir: Path
@@ -78,6 +99,8 @@ class QuantlabRun:
     fees: float
     slippage: float
     data_fingerprint: dict | None
+    trading_days_per_year: int = US_EQUITY_TRADING_DAYS
+    session_minutes_per_day: int = US_EQUITY_SESSION_MINUTES
 
     @classmethod
     def load(cls, run_dir: str | Path) -> Self:
@@ -137,7 +160,64 @@ class QuantlabRun:
             fees=float(config["fees"]),
             slippage=float(config["slippage"]),
             data_fingerprint=config.get("data_fingerprint"),
+            trading_days_per_year=int(
+                config.get("trading_days_per_year") or US_EQUITY_TRADING_DAYS
+            ),
+            session_minutes_per_day=int(
+                config.get("session_minutes_per_day") or US_EQUITY_SESSION_MINUTES
+            ),
         )
+
+    def split(self) -> dict:
+        """Return the run's in-sample/out-of-sample split, as its ``metrics.json`` records it.
+
+        The ``SPLIT_KEYS`` present at the level that carries them (the
+        top level of a ``run()`` run, ``stitched`` of a ``run_cv()`` run);
+        empty for a run without a model (``run_weights()``) or without a
+        ``metrics.json``.
+        """
+        path = self.run_dir / "metrics.json"
+        if not path.is_file():
+            return {}
+        metrics = json.loads(path.read_text())
+        level = metrics.get("stitched", metrics)
+        return {key: level[key] for key in SPLIT_KEYS if key in level}
+
+    def benchmark(self) -> dict | None:
+        """Return the run's benchmark, or ``None`` when it had none.
+
+        Returns
+        -------
+        dict or None
+            ``returns``: the benchmark's per-bar returns on the run's bars
+            (``equity.zarr``'s ``benchmark_returns``); ``symbol`` and
+            ``axis_symbol``: its names from ``metrics.json``.
+        """
+        with xr.open_zarr(self.run_dir / "equity.zarr") as equity:
+            if "benchmark_returns" not in equity:
+                return None
+            returns = equity["benchmark_returns"].load()
+        path = self.run_dir / "metrics.json"
+        metrics = json.loads(path.read_text()) if path.is_file() else {}
+        info = metrics.get("stitched", metrics).get("benchmark") or {}
+        return {
+            "returns": returns,
+            "symbol": info.get("symbol"),
+            "axis_symbol": info.get("axis_symbol"),
+        }
+
+    def tracker(self) -> Tracker:
+        """Return the run's tracker, rebuilt from ``config.json``; ``NullTracker`` without one."""
+        recorded = self.config.get("tracker")
+        if not recorded:
+            return NullTracker()
+        cls = get_cls_from_path(recorded["name"])
+        return cls.from_config(recorded)
+
+    @property
+    def backtester_class(self) -> str:
+        """The class name of the run's backtester (``WeightsVectorBt``, ...)."""
+        return str(self.config.get("name", "quantlab")).rsplit(".", 1)[-1]
 
     def rebalance_table(self) -> xr.Dataset:
         """Return the run's ``weights.zarr``: ``weight`` on ``(timestamp, symbol)``, loaded."""

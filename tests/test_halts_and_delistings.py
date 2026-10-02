@@ -176,3 +176,35 @@ def test_a_total_loss_delisting_settles_at_zero(tmp_path):
     equity = xr.open_zarr(run_dir / "equity.zarr").load()["value"].values
     # Bar 4: -310.30 + 500*14 + 250*0; bar 5: cash after selling 500 at 14.5 less 7.25.
     np.testing.assert_allclose(equity[4:], [6_689.70, 6_932.45], rtol=0, atol=1e-9)
+
+
+def test_metrics_record_the_halt_as_a_rejected_order_and_the_settlement(replay):
+    metrics = json.loads((replay / "metrics.json").read_text())
+
+    execution = metrics["execution"]
+    assert execution["rejected_order_count"] == 1
+    assert execution["rejected_orders"] == [
+        {
+            "symbol": "10001",
+            "axis_symbol": "10001",
+            "signal_timestamp": "2024-01-04T00:00:00",
+            "fill_timestamp": "2024-01-05T00:00:00",
+            "reason": _orders(replay)["reason"].iloc[2],
+        }
+    ]
+    assert execution["settlements"] == [
+        {
+            "symbol": "10002",
+            "axis_symbol": "10002",
+            "delisting_timestamp": "2024-01-08T00:00:00",
+            "settlement_timestamp": "2024-01-09T00:00:00",
+            "price": 16.1,
+            "quantity": 250,
+        }
+    ]
+    # The settlement is not an order: two buys and the final sale filled.
+    assert metrics["whole"]["Total Orders"] == 3
+    assert metrics["whole"]["Total Fees Paid"] == pytest.approx(5.25 + 5.05 + 7.25)
+    # Both round trips closed: 10002 by its settlement, 10001 by the sale.
+    assert (metrics["whole"]["Total Trades"], metrics["whole"]["Total Closed Trades"]) == (2, 2)
+    assert metrics["whole"]["Total Open Trades"] == 0

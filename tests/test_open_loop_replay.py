@@ -58,7 +58,10 @@ WEIGHTS = {
     10002: [0.5, NAN, 1.0, NAN, NAN, 0.5],
     10003: [0.0, NAN, 0.0, NAN, NAN, 0.0],
 }
-RUN_FILES = ["config.json", "decisions.zarr", "equity.zarr", "events.json", "orders.zarr"]
+RUN_FILES = [
+    "config.json", "decisions.zarr", "equity.zarr", "events.json", "metrics.json",
+    "orders.zarr", "report.html",
+]
 
 
 @pytest.fixture(scope="module")

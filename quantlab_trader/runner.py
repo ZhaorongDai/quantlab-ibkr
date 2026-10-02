@@ -20,6 +20,10 @@ from quantlab_trader.outputs import RunRecorder
 from quantlab_trader.quantlab_run import QuantlabRun
 from quantlab_trader.strategy import PortfolioStrategy
 
+#: The metric blocks a tracking run's summary receives, when present:
+#: quantlab's tracked blocks plus ``execution``.
+TRACKED_BLOCKS = ("whole", "in_sample", "out_of_sample", "benchmark", "relative", "execution")
+
 
 def run(config: TraderConfig) -> Path:
     """Execute the quantlab run ``config`` names and write a trader run directory.
@@ -28,6 +32,13 @@ def run(config: TraderConfig) -> Path:
     rebalance bar on the account's holdings, with the run's prediction
     panel and the decision prices from ``bar_before(anchor, lookback_bars)``;
     open loop executes the run's ``weights.zarr``.
+
+    The run is tracked through ``config.tracker``, or the quantlab run's own
+    tracker (``NullTracker`` when it had none), in the quantlab run's
+    project (``{Backtester}_backtest`` unless the tracker sets its own): one
+    tracking run named as the run directory, whose summary holds the metric
+    blocks of ``TRACKED_BLOCKS`` and which carries ``report.html``. A run
+    that raises is finished as failed.
 
     Parameters
     ----------
@@ -60,8 +71,24 @@ def run(config: TraderConfig) -> Path:
     strategy = PortfolioStrategy(
         venue=venue, cycle=DecisionCycle(targets), recorder=recorder
     )
-    venue.run(strategy)
-    return recorder.write()
+    tracker = config.tracker or quantlab_run.tracker()
+    with tracker.start_run(
+        project=f"{quantlab_run.backtester_class}_backtest",
+        group=None,
+        name=recorder.run_name,
+        config=config.get_config(),
+    ) as tracking:
+        venue.run(strategy)
+        run_dir = recorder.write()
+        tracking.summarize(
+            {
+                block: recorder.metrics[block]
+                for block in TRACKED_BLOCKS
+                if recorder.metrics.get(block) is not None
+            }
+        )
+        tracking.log_file(run_dir / "report.html")
+    return run_dir
 
 
 def _open_loop(

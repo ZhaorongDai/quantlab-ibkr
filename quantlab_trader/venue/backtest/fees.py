@@ -89,6 +89,23 @@ class IbkrFixedFeeModel(FeeModel):
             commission += cls.SEC_FEE_RATE * value
         return commission.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
 
+    @classmethod
+    def minimum_applies(cls, quantity: Decimal | int, price: Decimal | float) -> bool:
+        """Return whether the USD 1.00 minimum sets the commission of ``quantity`` at ``price``.
+
+        The per-share charge is below the minimum and the 1% cap does not
+        cut the minimum.
+
+        Examples
+        --------
+        >>> IbkrFixedFeeModel.minimum_applies(100, 10.0), IbkrFixedFeeModel.minimum_applies(300, 10.0)
+        (True, False)
+        >>> IbkrFixedFeeModel.minimum_applies(10, 5.0)  # the 1% cap, USD 0.50, applies
+        False
+        """
+        value = Decimal(quantity) * Decimal(str(price))
+        return cls.PER_SHARE * Decimal(quantity) < cls.MINIMUM <= cls.MAXIMUM_RATE * value
+
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:
         """Return the IBKR Pro Fixed fee of the fill in the instrument's quote currency."""
         if is_fee_free(order):

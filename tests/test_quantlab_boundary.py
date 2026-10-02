@@ -33,8 +33,8 @@ from tests.quantlab_run_fixture import build_constructor_run, build_quantlab_run
 
 PACKAGE = Path(__file__).resolve().parents[1] / "quantlab_trader"
 
-#: The quantlab modules trader's source may import (ADR 0008). quantlab's
-#: public return-statistics module joins when the metrics ticket adds it.
+#: The quantlab modules trader's source may import (ADR 0008), the public
+#: return-statistics module (ADR 0007) among them.
 ALLOWED = {
     "quantlab.base.portfolio",
     "quantlab.portfolio.prediction_panel",
@@ -42,6 +42,7 @@ ALLOWED = {
     "quantlab.utils.module",
     "quantlab.base.tracking",
     "quantlab.utils.backtest_report",
+    "quantlab.utils.backtest_stats",
 }
 
 #: Module prefixes that must never load in a trader process.

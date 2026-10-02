@@ -165,21 +165,9 @@ def test_decided_weights_equal_the_run_rebalance_table(replays):
     np.testing.assert_allclose(decided.values, expected.values, rtol=0, atol=1e-8)
 
 
-def _bit_for_bit(rule_name):
-    if rule_name == "topn":
-        return rule_name
-    return pytest.param(
-        rule_name,
-        marks=pytest.mark.xfail(
-            strict=True,
-            reason="quantlab: MeanVarianceOptimizer keeps turnover_penalty * |w - "
-            "w_current|_1 in the cvxpy problem when the penalty is 0, so the "
-            "solution depends on the holdings at solver precision (~1e-11)",
-        ),
-    )
-
-
-@pytest.mark.parametrize("rule_name", [_bit_for_bit(name) for name in sorted(RULES)])
+# Bit for bit for mean-variance too since quantlab #112 leaves the turnover
+# term out of the problem at a zero penalty.
+@pytest.mark.parametrize("rule_name", sorted(RULES))
 def test_decided_weights_equal_the_run_rebalance_table_bit_for_bit(rule_name, tmp_path_factory):
     replays = _replays(rule_name, tmp_path_factory)
     decided, expected, _ = _decided_and_table(replays)
