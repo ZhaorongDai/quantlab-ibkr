@@ -37,7 +37,7 @@ def _inputs(close: dict, t=T) -> DecisionInputs:
         predictions=None,
         tradable=close.notna(),
         close=close,
-        valuation_history=None,
+        decision_prices=None,
         delisted=pd.Series(False, index=close.index),
     )
 
@@ -190,7 +190,7 @@ def _closed_inputs(close: dict, predictions: dict, tradable: dict) -> DecisionIn
         ),
         tradable=pd.Series(tradable, dtype=bool),
         close=close,
-        valuation_history=None,
+        decision_prices=None,
         delisted=pd.Series(False, index=close.index),
     )
 

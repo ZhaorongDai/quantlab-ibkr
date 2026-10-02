@@ -147,7 +147,7 @@ class ConstructorTargets(TargetSource):
             predictions,
             xr.DataArray(tradable.to_numpy(), dims="symbol", coords={"symbol": symbols}),
             xr.DataArray(held.to_numpy(dtype=float), dims="symbol", coords={"symbol": held.index}),
-            valuation_price=inputs.valuation_history,
+            valuation_price=inputs.decision_prices,
         )
         return self.constructor.decide(context)
 

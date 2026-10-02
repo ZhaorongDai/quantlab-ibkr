@@ -155,6 +155,6 @@ class BacktestDecisionSource(DecisionSource):
             predictions=predictions,
             tradable=self._tradable.loc[t],
             close=self._close.loc[t],
-            valuation_history=self._valuation.sel(timestamp=slice(None, t)),
+            decision_prices=self._valuation.sel(timestamp=slice(None, t)),
             delisted=self._delisted.loc[t],
         )

@@ -170,7 +170,7 @@ class DecisionInputs:
     close : pandas.Series
         Raw close of t, the last raw close for a security without a price at
         t; NaN before a security's first price. Sizes orders and marks equity.
-    valuation_history : xarray.DataArray or None
+    decision_prices : xarray.DataArray or None
         Decision prices (the run's valuation column) up to and including t,
         on ``(timestamp, symbol)``; ``None`` where nothing reads them.
     delisted : pandas.Series
@@ -182,7 +182,7 @@ class DecisionInputs:
     >>> close = pd.Series({10001: 30.0})
     >>> inputs = DecisionInputs(
     ...     timestamp=pd.Timestamp("2024-01-03"), predictions=None,
-    ...     tradable=close.notna(), close=close, valuation_history=None,
+    ...     tradable=close.notna(), close=close, decision_prices=None,
     ...     delisted=close.isna(),
     ... )
     >>> inputs.close[10001]
@@ -193,7 +193,7 @@ class DecisionInputs:
     predictions: xr.Dataset | None
     tradable: pd.Series
     close: pd.Series
-    valuation_history: xr.DataArray | None
+    decision_prices: xr.DataArray | None
     delisted: pd.Series
 
 
