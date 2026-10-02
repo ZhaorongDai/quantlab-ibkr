@@ -23,7 +23,8 @@ quantlab_trader/
   strategy.py           PortfolioStrategy: the one nautilus Strategy, backtest and live
   outputs.py            RunRecorder: the trader run directory
   runner.py             run(config): wires run, venue, strategy and recorder
-  parity.py             reserved for the parity report (#9)
+  parity.py             parity ladder and report (ADR 0007); the only module that may
+                        import quantlab's backtest layer
   cli.py                `quantlab-trader backtest` (and `parity`, #9)
   venue/backtest/       venue.py (BacktestVenue), feed.py, resolver.py, submitter.py,
                         source.py, clock.py, fees.py, fills.py, corporate_actions.py
@@ -65,13 +66,15 @@ window's first bar for `run()`, the first fold's for `run_cv()`). Narrowing trad
 **The quantlab allowlist.** trader's source may import exactly `quantlab.base.portfolio`,
 `quantlab.portfolio.prediction_panel`, `quantlab.base.data` (the `MarketDataset` check),
 `quantlab.utils.module` (`load_dataset_from_config`, `get_cls_from_path`),
-`quantlab.base.tracking` and `quantlab.utils.backtest_report`. At run time it also loads, by class
-path from `config.json`, the rule's module (`quantlab.portfolio.*`), the price dataset's module
-(`quantlab.dataset.*`) and the tracker's (`quantlab.tracking.*`). `tests/test_quantlab_boundary.py`
-locks both: an ast scan of every trader module against the allowlist, and a subprocess that loads a
-fixture run and runs one decision, then asserts that no `quantlab.model`, `quantlab.factor`,
-`quantlab.label`, `quantlab.backtest`, `torch`, `xgboost`, `KunQuant` or `vectorbt` is in
-`sys.modules`.
+`quantlab.base.tracking`, `quantlab.utils.backtest_report`, and the public returns-statistics
+module ADR 0007 has quantlab add for `metrics.json`. At run time it also loads, by class path from
+`config.json`, the rule's module (`quantlab.portfolio.*`), the price dataset's module
+(`quantlab.dataset.*`) and the tracker's (`quantlab.tracking.*`). The one exception is `parity.py`,
+which may also import quantlab's backtest layer to run the ladder's quantlab rungs (ADR 0007).
+`tests/test_quantlab_boundary.py` locks both: an ast scan of every trader module but `parity.py`
+against the allowlist, and a subprocess that loads a fixture run and runs one decision through
+`runner.py`, then asserts that no `quantlab.model`, `quantlab.factor`, `quantlab.label`,
+`quantlab.backtest`, `torch`, `xgboost`, `KunQuant` or `vectorbt` is in `sys.modules`.
 
 ## Why
 
@@ -92,8 +95,8 @@ on plain arrays, which is where parity bugs will be found.
 - Reading quantlab's market columns from the backtester class (`MARKET`). Rejected: importing
   `quantlab.backtest.predefined.us_equity` loads vectorbt. quantlab writes a `market` block
   (`fill_price_column`, `valuation_price_column`) into `config.json` instead.
-- The `execution` block on `TraderConfig` (#5). Moved into `BacktestVenueConfig`: fees, slippage
-  and the simulated starting cash exist only in the backtest venue.
+- The `execution` block on `TraderConfig` (#5). Moved into `BacktestVenueConfig.execution`: fees,
+  slippage and the simulated starting cash exist only in the backtest venue.
 
 ## Consequences
 
