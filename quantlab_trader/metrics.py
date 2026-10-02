@@ -16,7 +16,7 @@ has, computed by quantlab's own public statistics
   orders with a fill bar in the window that did not fill; the holding was
   kept), ``max_target_deviation``, ``settlements`` (delisted holdings settled
   into cash), and ``trader``, the facts quantlab has no name for:
-  commissions, minimum-fee hits, dividends, splits, value distributions and
+  commissions, minimum-fee hits, dividends, splits, implied splits (#27), value distributions and
   the peak cash debit;
 - ``portfolio_construction`` (closed loop): the held bars and the rule's
   events, as quantlab's cross-section backtester records them;
@@ -459,6 +459,7 @@ def _trader_facts(fills: xr.Dataset, events: Sequence[Mapping], cycles: Sequence
     for name in CASH_ACTIONS.values():
         facts[name] = {"count": 0, "amount": 0.0}
     facts["splits"] = {"count": 0, "share_change": 0}
+    facts["implied_splits"] = {"count": 0, "share_change": 0}
     for event in events:
         if event.get("type") != "corporate_action":
             continue
@@ -467,10 +468,11 @@ def _trader_facts(fills: xr.Dataset, events: Sequence[Mapping], cycles: Sequence
             block = facts[CASH_ACTIONS[action]]
             block["count"] += 1
             block["amount"] = round(block["amount"] + float(event["amount"]), 2)
-        elif action == "SPLIT":
-            facts["splits"]["count"] += 1
+        elif action in ("SPLIT", "IMPLIED_SPLIT"):
+            block = facts["splits" if action == "SPLIT" else "implied_splits"]
+            block["count"] += 1
             sign = 1 if event["side"] == "BUY" else -1
-            facts["splits"]["share_change"] += sign * int(event["quantity"])
+            block["share_change"] += sign * int(event["quantity"])
     cash = [c.equity * (1.0 - float(c.current_weights.sum())) for c in cycles]
     facts["peak_cash_debit"] = max(0.0, -min(cash)) if cash else 0.0
     return facts
@@ -518,7 +520,7 @@ def _trades(fills: xr.Dataset, events: Sequence[Mapping]) -> list[_Trade]:
             )
         )
     for event in events:
-        if event.get("type") == "corporate_action" and event.get("action") in ("SPLIT", "DELIST"):
+        if event.get("type") == "corporate_action" and event.get("action") in ("SPLIT", "IMPLIED_SPLIT", "DELIST"):
             sign = 1 if event["side"] == "BUY" else -1
             # Corporate actions act at the open, before the bar's own fills.
             changes.append(

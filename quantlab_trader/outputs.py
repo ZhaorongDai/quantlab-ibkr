@@ -240,7 +240,7 @@ class RunRecorder:
         ----------
         action : str
             The kind, from the fill's ``CORPORATE_ACTION_<KIND>`` tag
-            (``DELIST``, ``SPLIT``).
+            (``DELIST``, ``SPLIT``, ``IMPLIED_SPLIT``).
         ts_ns : int
             The fill's UNIX nanoseconds; the event is dated in the market's time zone.
         permno : Hashable
@@ -282,7 +282,7 @@ class RunRecorder:
         ----------
         action : str
             ``DIVIDEND``, ``CASH_IN_LIEU``, ``DISTRIBUTION``, or a logged
-            ``FINAL``/``OTHER`` factor day or ``DELISTING_PAYMENT`` (``amount`` 0).
+            ``FINAL``/``OTHER`` factor day, a ``MISMATCH`` day or ``DELISTING_PAYMENT`` (``amount`` 0).
         ts_ns : int
             When the venue applied it; dated in the market's time zone.
         permno : Hashable

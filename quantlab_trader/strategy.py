@@ -105,7 +105,7 @@ class PortfolioStrategy(Strategy):
         """Record a corporate action the venue applied to a holding without a fill.
 
         Cash it moved (``DIVIDEND``, ``CASH_IN_LIEU``, ``DISTRIBUTION``) or a
-        factor day it left the holding alone on (``FINAL``, ``OTHER``), or a
+        day it left the holding alone on (``FINAL``, ``OTHER``, ``MISMATCH``), or a
         delisting payment the settlement pays instead (``DELISTING_PAYMENT``).
 
         Parameters

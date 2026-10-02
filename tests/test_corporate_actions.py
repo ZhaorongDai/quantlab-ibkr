@@ -232,10 +232,10 @@ def test_corporate_actions_are_events_with_zero_fees(replay):
          "symbol": 10004, "quantity": 200, "amount": 4_200.0, "split_factor": 1.25},
         {"type": "corporate_action", "action": "OTHER", "timestamp": "2024-01-10",
          "symbol": 10002, "quantity": 166, "amount": 0.0, "split_factor": 0.9,
-         "share_factor": 1.0},
+         "share_factor": 1.0, "implied_factor": 1.0},
         {"type": "corporate_action", "action": "FINAL", "timestamp": "2024-01-10",
          "symbol": 10005, "quantity": 500, "amount": 0.0, "split_factor": 0.0,
-         "share_factor": None},
+         "share_factor": None, "implied_factor": None},
         {"type": "corporate_action", "action": "DELIST", "timestamp": "2024-01-11",
          "symbol": 10005, "side": "SELL", "quantity": 500, "price": 23.65, "fee": 0.0},
     ])

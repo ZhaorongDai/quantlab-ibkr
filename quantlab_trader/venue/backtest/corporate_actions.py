@@ -18,6 +18,17 @@ position held at the prior close:
 - **final event** (``k = 0``, a merger or liquidation): nothing; the holding
   is settled by the delisting path. It is logged, as is any **other** factor
   day, which leaves the position alone;
+- **price-implied share change** (#27): ``adjClose`` is chained from CRSP's
+  total return, so on a day with a raw close the factor the prices imply,
+  ``x = (adjClose[t] / adjClose[p] * close[p] - divCash[t]) / close[t]``
+  (p the last bar with a raw close, net of what was booked on rows between
+  them), is the holder's share change that conserves value. A factor day
+  whose ``splitFactor`` agrees with x (``PRICE_FACTOR_RTOL``) is a holder
+  split by ``splitFactor`` even when the share factor disagrees; a day
+  without a usable factor whose x lies outside
+  ``[1 / (1 + IMPLIED_SPLIT_TOL), 1 + IMPLIED_SPLIT_TOL]`` is an
+  **implied split** booked as a split by x (``IMPLIED_SPLIT``); a smaller
+  disagreement above ``PRICE_FACTOR_RTOL`` is logged as ``MISMATCH``;
 - **delisting** (quantlab ADR 0014): a venue fill closing the delisted
   holding at its last valuation on the bar after its delisting bar. CRSP
   books a cash merger's payment as a distribution (``dlynonorddivamt``) on
@@ -47,6 +58,7 @@ filled before its action.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import uuid
 from collections import deque
@@ -74,11 +86,20 @@ from quantlab_trader.venue.backtest.source import DelistingSettlement
 #: Relative tolerance of "equal" factors (the price and share factors of a
 #: holder split, a factor and 1), as the measurements on #17 used.
 FACTOR_RTOL = 1e-4
+#: Relative tolerance of a factor agreeing with the factor the prices imply
+#: (#27): ``splitFactor`` against CRSP's return, and the threshold above which
+#: a day without a usable factor is logged as a ``MISMATCH``. Measured on the
+#: market store 2020-2024: on every ordinary day the two agree within 1e-4.
+PRICE_FACTOR_RTOL = 0.01
+#: A price-implied share change is booked when it exceeds this, either way:
+#: ``x > 1 + IMPLIED_SPLIT_TOL`` or ``x < 1 / (1 + IMPLIED_SPLIT_TOL)`` (#27).
+IMPLIED_SPLIT_TOL = 0.2
 #: Slack of the share floors against binary rounding (300 * (1/3) is 99.99...).
 _SHARE_EPS = 1e-9
 
-#: What a factor day is (ADR 0009 amendment); ``None`` for no factor day.
-FactorKind = Literal["SPLIT", "DISTRIBUTION", "FINAL", "OTHER"]
+#: What a corporate-action day is (ADR 0009 and its amendments); ``None`` for
+#: a dividend alone.
+FactorKind = Literal["SPLIT", "DISTRIBUTION", "FINAL", "OTHER", "IMPLIED_SPLIT", "MISMATCH"]
 
 
 def classify_factor_day(split_factor: float, share_factor: float) -> FactorKind | None:
@@ -118,6 +139,57 @@ def classify_factor_day(split_factor: float, share_factor: float) -> FactorKind 
     return "OTHER"
 
 
+def reconcile_with_prices(
+    kind: FactorKind | None, split_factor: float, implied_factor: float
+) -> FactorKind | None:
+    """Return what a day is once its factors are checked against its prices (#27).
+
+    Only a day the factors leave alone (``None`` or ``"OTHER"``) changes: a
+    factor day whose ``splitFactor`` agrees with the price-implied factor
+    becomes a ``"SPLIT"`` by ``splitFactor``; otherwise an implied factor
+    beyond ``IMPLIED_SPLIT_TOL`` makes it an ``"IMPLIED_SPLIT"``, and one
+    beyond ``PRICE_FACTOR_RTOL`` makes a day without a factor a
+    ``"MISMATCH"`` (logged only).
+
+    Parameters
+    ----------
+    kind : str or None
+        What the factors make the day (``classify_factor_day``).
+    split_factor : float
+        ``splitFactor`` of the day.
+    implied_factor : float
+        ``x``, the share change that conserves the holder's value given
+        ``adjClose``'s return; NaN where the prices cannot say.
+
+    Examples
+    --------
+    >>> reconcile_with_prices("OTHER", 0.035404, 0.035395)  # PERMNO 18217
+    'SPLIT'
+    >>> reconcile_with_prices(None, 1.0, 0.0763 / 5.1357)  # PERMNO 14051
+    'IMPLIED_SPLIT'
+    >>> reconcile_with_prices(None, 1.0, 10 / 11), reconcile_with_prices(None, 1.0, 1.00005)
+    ('MISMATCH', None)
+    >>> reconcile_with_prices("OTHER", 0.9, 1.0), reconcile_with_prices("SPLIT", 2.0, 1.0)
+    ('OTHER', 'SPLIT')
+    """
+    x, k = float(implied_factor), float(split_factor)
+    if kind not in (None, "OTHER") or not (math.isfinite(x) and x > 0):
+        return kind
+    if (
+        kind == "OTHER"
+        and math.isfinite(k)
+        and k > 0
+        and not math.isclose(k, 1.0, rel_tol=FACTOR_RTOL)
+        and math.isclose(x, k, rel_tol=PRICE_FACTOR_RTOL)
+    ):
+        return "SPLIT"
+    if max(x, 1.0 / x) > 1.0 + IMPLIED_SPLIT_TOL:
+        return "IMPLIED_SPLIT"
+    if kind is None and not math.isclose(x, 1.0, rel_tol=PRICE_FACTOR_RTOL):
+        return "MISMATCH"
+    return kind
+
+
 def split_shares(quantity: int, k: float) -> int:
     """Return the whole shares ``quantity`` becomes in a holder split by ``k``, toward zero.
 
@@ -140,9 +212,10 @@ class CorporateActionDay:
         The security.
     date : pandas.Timestamp
         The ex-date t.
-    kind : {"SPLIT", "DISTRIBUTION", "FINAL", "OTHER"} or None
-        What the factors make the day (``classify_factor_day``); ``None`` for
-        a dividend alone.
+    kind : {"SPLIT", "DISTRIBUTION", "FINAL", "OTHER", "IMPLIED_SPLIT", "MISMATCH"} or None
+        What the factors make the day (``classify_factor_day``), checked
+        against its prices (``reconcile_with_prices``); ``None`` for a
+        dividend alone.
     split_factor : float
         ``splitFactor[t]``, the holder split factor ``k`` of a split.
     share_factor : float
@@ -154,6 +227,9 @@ class CorporateActionDay:
         The last raw close before t.
     close : float
         The raw close of t; NaN without one.
+    implied_factor : float
+        The share change the prices imply (``reconcile_with_prices``); NaN
+        where they cannot say (no raw close of t or before it).
     """
 
     permno: Hashable
@@ -164,6 +240,12 @@ class CorporateActionDay:
     dividend: float
     pre_close: float
     close: float
+    implied_factor: float = math.nan
+
+    @property
+    def holder_factor(self) -> float:
+        """``k`` of a holder split: ``splitFactor``, or the implied factor of an implied split."""
+        return self.implied_factor if self.kind == "IMPLIED_SPLIT" else self.split_factor
 
     @property
     def distribution_price(self) -> float:
@@ -184,11 +266,19 @@ def corporate_action_days(prices: xr.Dataset) -> tuple[CorporateActionDay, ...]:
     The first bar has none: no position is open before the first next-open
     fill, at the open of the second bar.
 
+    A day is a dividend, a factor day, or a day whose prices disagree with
+    ``adjClose``'s return (``reconcile_with_prices``). The implied factor of
+    a bar t with a raw close is
+    ``(adjClose[t] / adjClose[p] * close[p] - C - Q * divCash[t]) / (Q * close[t])``,
+    with p the last bar with a raw close and ``Q``, ``C`` the shares and cash
+    per share held at p that the actions booked on the rows between p and t
+    (a halt's rows without a price) made of it.
+
     Parameters
     ----------
     prices : xarray.Dataset
         The run's price panel on ``(timestamp, symbol)`` with raw ``close``,
-        ``splitFactor``, ``cumfacshr`` and ``divCash``.
+        ``adjClose``, ``splitFactor``, ``cumfacshr`` and ``divCash``.
 
     Returns
     -------
@@ -203,6 +293,7 @@ def corporate_action_days(prices: xr.Dataset) -> tuple[CorporateActionDay, ...]:
     ...         "splitFactor": (("timestamp", "symbol"), [[1.0], [1.0], [1 / 3]]),
     ...         "cumfacshr": (("timestamp", "symbol"), [[1.0], [1.0], [3.0]]),
     ...         "divCash": (("timestamp", "symbol"), [[0.0], [0.5], [0.0]]),
+    ...         "adjClose": (("timestamp", "symbol"), [[13.0], [13.8], [127 / 3 * 0.99]]),
     ...     },
     ...     coords={"timestamp": pd.bdate_range("2024-01-02", periods=3), "symbol": [10001]},
     ... )
@@ -214,47 +305,85 @@ def corporate_action_days(prices: xr.Dataset) -> tuple[CorporateActionDay, ...]:
         return prices[name].transpose("timestamp", "symbol").to_pandas().astype(float)
 
     split_factor, dividend, close = frame("splitFactor"), frame("divCash"), frame("close")
-    cumfacshr = frame("cumfacshr")
+    adj_close, cumfacshr = frame("adjClose"), frame("cumfacshr")
     with np.errstate(divide="ignore", invalid="ignore"):
         share_factor = cumfacshr.ffill().shift(1) / cumfacshr
     pre_close = close.ffill().shift(1)
     dividend = dividend.where(np.isfinite(dividend), 0.0)
+    # The anchor of bar t: the last bar before it with a raw close and an adjClose.
+    priced = (close.notna() & adj_close.notna()).to_numpy()
+    anchor_close = close.where(priced).ffill().shift(1).to_numpy()
+    anchor_return = (adj_close / adj_close.where(priced).ffill().shift(1)).to_numpy()
+    closes, cash = close.to_numpy(), dividend.to_numpy()
+    with np.errstate(divide="ignore", invalid="ignore"):
+        naive = (anchor_return * anchor_close - cash) / closes
     # Candidates only: classify_factor_day is per element, the panel is not.
     k_values, s_values = split_factor.to_numpy(), share_factor.to_numpy()
     with np.errstate(invalid="ignore"):
-        candidate = (
-            (dividend.to_numpy() != 0.0)
+        actions = (
+            (cash != 0.0)
             | (~np.isnan(k_values) & ~np.isclose(k_values, 1.0, rtol=FACTOR_RTOL, atol=0.0))
             | (~np.isnan(s_values) & ~np.isclose(s_values, 1.0, rtol=FACTOR_RTOL, atol=0.0))
         )
-    candidate[0, :] = False
+        disagree = priced & np.isfinite(naive) & ~np.isclose(
+            naive, 1.0, rtol=PRICE_FACTOR_RTOL, atol=0.0
+        )
+    actions[0, :] = False
+    disagree[0, :] = False
+    # The first priced bar after an action on a row without a price: its
+    # implied factor must net out what that action booked.
+    after_unpriced = np.zeros_like(actions)
+    for bar, column in zip(*np.nonzero(actions & ~priced)):
+        later = np.flatnonzero(priced[bar + 1 :, column])
+        if later.size:
+            after_unpriced[bar + 1 + later[0], column] = True
+    visit = actions | disagree | after_unpriced
     days = []
-    for bar, column in zip(*np.nonzero(candidate)):
-        date, permno = split_factor.index[bar], split_factor.columns[column]
-        k, s = split_factor.iat[bar, column], share_factor.iat[bar, column]
-        cash = float(dividend.iat[bar, column])
-        kind = classify_factor_day(k, s)
-        if kind is None and cash == 0.0:
-            continue
-        days.append(
-            CorporateActionDay(
+    for column in range(visit.shape[1]):
+        held_shares, held_cash = 1.0, 0.0  # per share held at the anchor
+        for bar in np.flatnonzero(visit[:, column]):
+            permno = split_factor.columns[column]
+            k, s = split_factor.iat[bar, column], share_factor.iat[bar, column]
+            day = CorporateActionDay(
                 permno=permno,
-                date=pd.Timestamp(date),
-                kind=kind,
+                date=pd.Timestamp(split_factor.index[bar]),
+                kind=classify_factor_day(k, s),
                 split_factor=float(k),
                 share_factor=float(s),
-                dividend=cash,
+                dividend=float(cash[bar, column]),
                 pre_close=float(pre_close.iat[bar, column]),
-                close=float(close.iat[bar, column]),
+                close=float(closes[bar, column]),
             )
-        )
-    return tuple(days)
+            if not priced[bar, column]:
+                held_cash += held_shares * day.dividend
+                if day.kind == "DISTRIBUTION":
+                    held_cash += held_shares * (day.split_factor - 1.0) * day.distribution_price
+                elif day.kind == "SPLIT":
+                    held_shares *= day.split_factor
+            else:
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    implied = (
+                        anchor_return[bar, column] * anchor_close[bar, column]
+                        - held_cash
+                        - held_shares * day.dividend
+                    ) / (held_shares * day.close)
+                held_shares, held_cash = 1.0, 0.0
+                day = dataclasses.replace(
+                    day,
+                    implied_factor=float(implied),
+                    kind=reconcile_with_prices(day.kind, day.split_factor, implied),
+                )
+            if day.kind is not None or day.dividend != 0.0:
+                days.append(day)
+    return tuple(sorted(days, key=lambda day: day.date))
 
 
 def holder_split_factors(
     days: Sequence[CorporateActionDay],
 ) -> dict[tuple[pd.Timestamp, Hashable], float]:
-    """Return ``k`` of every holder split, by ``(ex-date, permno)``: what rescales a queued order.
+    """Return ``k`` of every holder split, implied ones too, by ``(ex-date, permno)``.
+
+    It is what rescales a queued order.
 
     Parameters
     ----------
@@ -273,7 +402,11 @@ def holder_split_factors(
     >>> holder_split_factors([day])
     {(Timestamp('2024-01-04 00:00:00'), 10001): 2.0}
     """
-    return {(day.date, day.permno): day.split_factor for day in days if day.kind == "SPLIT"}
+    return {
+        (day.date, day.permno): day.holder_factor
+        for day in days
+        if day.kind in ("SPLIT", "IMPLIED_SPLIT")
+    }
 
 
 #: Called with ``(action, ts_ns=, permno=, quantity=, amount=, **detail)`` for
@@ -352,7 +485,7 @@ class CorporateActionModule(SimulationModule):
         elif day.dividend:
             amount = self._credit(quantity * day.dividend)
             self._on_event("DIVIDEND", amount=amount, per_share=day.dividend, **report)
-        if day.kind == "SPLIT":
+        if day.kind in ("SPLIT", "IMPLIED_SPLIT"):
             self._split(position, quantity, day, report)
         elif day.kind == "DISTRIBUTION":
             amount = self._credit(
@@ -367,6 +500,7 @@ class CorporateActionModule(SimulationModule):
                 amount=0.0,
                 split_factor=_json_float(day.split_factor),
                 share_factor=_json_float(day.share_factor),
+                implied_factor=_json_float(day.implied_factor),
                 **report,
             )
 
@@ -383,12 +517,12 @@ class CorporateActionModule(SimulationModule):
 
     def _split(self, position, quantity: int, day: CorporateActionDay, report: dict) -> None:
         """A price-0 venue fill of the share-count change plus cash in lieu of the fraction."""
-        k = day.split_factor
+        k = day.holder_factor
         shares = split_shares(quantity, k)
         delta = shares - quantity
         if delta:
             side = OrderSide.BUY if delta > 0 else OrderSide.SELL
-            self._venue_fill(position, side, abs(delta), 0.0, "SPLIT")
+            self._venue_fill(position, side, abs(delta), 0.0, day.kind)
         fraction = quantity * k - shares
         if fraction and np.isfinite(day.pre_close):
             amount = self._credit(fraction * day.pre_close / k)

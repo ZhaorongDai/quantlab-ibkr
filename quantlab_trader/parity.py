@@ -29,8 +29,8 @@ imports quantlab's backtest layer, ADR 0008); trader never re-implements
 vectorbt's sizing, rejections or settlements. L2-L5 run the **reference
 ledger**, a numpy simulator written here, independent of the nautilus run:
 it re-implements the corporate-action and sizing arithmetic rather than
-calling the venue's, sharing only the factor-equality tolerance
-``FACTOR_RTOL`` of the classification and the pure cost functions
+calling the venue's, sharing only the tolerances of the classification
+(``FACTOR_RTOL``, ``PRICE_FACTOR_RTOL``, ``IMPLIED_SPLIT_TOL``) and the pure cost functions
 ``IbkrFixedFeeModel.charge`` and ``slipped_price`` (unit-tested on their
 own; the ladder then checks how nautilus applies them).
 
@@ -72,7 +72,11 @@ from quantlab_trader import runner
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.metrics import UNFILLED_STATUSES
 from quantlab_trader.quantlab_run import QuantlabRun
-from quantlab_trader.venue.backtest.corporate_actions import FACTOR_RTOL
+from quantlab_trader.venue.backtest.corporate_actions import (
+    FACTOR_RTOL,
+    IMPLIED_SPLIT_TOL,
+    PRICE_FACTOR_RTOL,
+)
 from quantlab_trader.venue.backtest.fees import IbkrFixedFeeModel
 from quantlab_trader.venue.backtest.fills import slipped_price
 from quantlab_trader.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
@@ -95,8 +99,8 @@ RUNG_DESCRIPTIONS = {
 #: What the reference ledger shares with the code it checks, for the report.
 LEDGER_NOTE = (
     "L2-L5 are a numpy re-implementation of the execution conventions, independent of "
-    "the nautilus run; they share only FACTOR_RTOL (the factor-equality tolerance of the "
-    "corporate-action classification) and the pure cost functions "
+    "the nautilus run; they share only FACTOR_RTOL, PRICE_FACTOR_RTOL and IMPLIED_SPLIT_TOL "
+    "(the tolerances of the corporate-action classification) and the pure cost functions "
     "IbkrFixedFeeModel.charge and slipped_price, which are unit-tested on their own."
 )
 
@@ -288,7 +292,9 @@ class _Market:
     ``fill``/``valuation`` are the run's (adjusted) market columns as read,
     NaN where the market had no price; ``open``/``close`` the raw prices;
     ``delisted`` the dataset's delisting bars on the valuation column;
-    ``split_factor``, ``cumfacshr`` and ``dividend`` the CRSP fields.
+    ``split_factor``, ``cumfacshr`` and ``dividend`` the CRSP fields,
+    ``adj_close`` CRSP's ``adjClose`` (chained from its total return), which
+    the price-implied share changes are read from (#27).
     """
 
     timestamps: pd.DatetimeIndex
@@ -302,6 +308,7 @@ class _Market:
     split_factor: np.ndarray
     cumfacshr: np.ndarray
     dividend: np.ndarray
+    adj_close: np.ndarray
 
     @classmethod
     def load(cls, run: QuantlabRun, table: xr.DataArray) -> _Market:
@@ -344,6 +351,7 @@ class _Market:
             split_factor=array("splitFactor"),
             cumfacshr=array("cumfacshr"),
             dividend=array("divCash"),
+            adj_close=array("adjClose"),
         )
 
 
@@ -641,13 +649,14 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
       holding ``q * k`` (whole shares: floored toward zero, the fraction paid
       at the pre-split close / k); a value distribution (k > 1, share factor
       1) pays ``q * (k - 1) * close[t]`` (the pre-split close / k without a
-      close); a holding delisted on bar t - 1 is settled at its last
+      close); a share change the prices imply is booked as a split by its
+      factor (``_holder_days``, #27); a holding delisted on bar t - 1 is settled at its last
       valuation in raw prices, the last raw close grown by the valuation
       column's return since;
     - the open of t: the orders decided at the close of t - 1, sells first,
       fill at the raw open moved by the slippage and pay the fee; an order
       without an opening print is rejected (the holding is kept), one queued
-      across a split is rescaled by k;
+      across a split (implied or not) is rescaled by k;
     - the close of t: equity is cash plus each holding at its raw close
       (carried forward over a halt; the last valuation on a delisting
       bar); each finite target of the table's row becomes an order of
@@ -683,6 +692,7 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
     pre_close = _shift(last_close)
     kind = _factor_days(split_factor, share_factor)
     kind[0] = ""
+    kind, holder = _holder_days(market, kind, dividend, pre_close)
 
     book = _NautilusMoney(conventions.init_cash, n_symbols) if costs else None
     cash = float(conventions.init_cash)
@@ -713,6 +723,7 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
                         book.credit(money(q * dividend[i, j]))
                 k = split_factor[i, j]
                 if kind[i, j] == "SPLIT":
+                    k = holder[i, j]
                     if whole:
                         shares = math.copysign(math.floor(abs(q) * k + _SHARE_EPS), q)
                         fraction = q * k - shares
@@ -748,7 +759,7 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
                     continue
                 decided = quantity
                 if kind[i, j] == "SPLIT":
-                    k = split_factor[i, j]
+                    k = holder[i, j]
                     quantity = math.floor(quantity * k + _SHARE_EPS) if whole else quantity * k
                     if quantity == 0:
                         rejections.append((timestamps[i], symbols[j]))
@@ -861,6 +872,61 @@ def _factor_days(split_factor: np.ndarray, share_factor: np.ndarray) -> np.ndarr
         split = finite & (k > 0) & k_moves & np.isclose(k, s, rtol=FACTOR_RTOL, atol=0.0)
         distribution = finite & (k > 1) & k_moves & ~s_moves & ~split
     return np.where(split, "SPLIT", np.where(distribution, "DISTRIBUTION", ""))
+
+
+def _holder_days(
+    market: _Market, kind: np.ndarray, dividend: np.ndarray, pre_close: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
+    """Check the factor days against the prices; return the kinds and each split's holder factor.
+
+    ``adjClose`` is chained from CRSP's total return, so a holder of one
+    share at the last raw close (``anchor``) is worth ``adjClose[t] /
+    adjClose[anchor] * close[anchor]`` at t. Walking the bars, each
+    symbol's holding per anchor share (``units`` shares and ``paid`` cash)
+    takes the dividends, distributions and splits booked since the anchor;
+    on a bar with a raw close, the share change that conserves that worth
+    is ``x = (worth - paid - units * divCash) / (units * close)``. A bar
+    the factors leave alone (no factor kind) becomes a split by
+    ``splitFactor`` when that agrees with x (``PRICE_FACTOR_RTOL``) and a
+    factor exists, else a split by x when x lies beyond
+    ``IMPLIED_SPLIT_TOL`` either way; a final event (k = 0) stays the
+    delisting path's. Returns ``kind`` with those bars
+    marked ``"SPLIT"`` and the holder factor of every split (NaN elsewhere).
+    """
+    close, adj, k = market.close, market.adj_close, market.split_factor
+    n_bars, n_symbols = close.shape
+    kind = kind.copy()
+    holder = np.where(kind == "SPLIT", k, np.nan)
+    units, paid = np.ones(n_symbols), np.zeros(n_symbols)
+    anchor_close, anchor_adj = np.full(n_symbols, np.nan), np.full(n_symbols, np.nan)
+    limit = 1.0 + IMPLIED_SPLIT_TOL
+    for i in range(n_bars):
+        priced = np.isfinite(close[i]) & np.isfinite(adj[i])
+        if i > 0:
+            paid += units * dividend[i]
+            spun = (kind[i] == "DISTRIBUTION") & ~priced
+            price = pre_close[i] / np.where(spun, k[i], 1.0)
+            paid += np.where(spun, units * (k[i] - 1.0) * price, 0.0)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                x = (adj[i] / anchor_adj * anchor_close - paid) / (units * close[i])
+                # A final event (k = 0) is the delisting path's, never a split.
+                open_ = (kind[i] == "") & (k[i] != 0.0) & priced & np.isfinite(x) & (x > 0)
+                has_factor = (
+                    np.isfinite(k[i])
+                    & (k[i] > 0)
+                    & (np.abs(k[i] - 1.0) > FACTOR_RTOL * np.maximum(k[i], 1.0))
+                )
+                agrees = has_factor & (np.abs(x - k[i]) <= PRICE_FACTOR_RTOL * np.maximum(x, k[i]))
+                implied = (x > limit) | (x < 1.0 / limit)
+                by_factor = open_ & agrees
+                by_prices = open_ & ~agrees & implied
+            holder[i] = np.where(by_factor, k[i], np.where(by_prices, x, holder[i]))
+            kind[i] = np.where(by_factor | by_prices, "SPLIT", kind[i])
+            units = np.where((kind[i] == "SPLIT") & ~priced, units * k[i], units)
+        anchor_close = np.where(priced, close[i], anchor_close)
+        anchor_adj = np.where(priced, adj[i], anchor_adj)
+        units, paid = np.where(priced, 1.0, units), np.where(priced, 0.0, paid)
+    return kind, holder
 
 
 def _fill(open_price: float, side: str, quantity: float, conventions: _Conventions) -> tuple[float, float]:
