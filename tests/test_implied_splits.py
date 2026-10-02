@@ -1,4 +1,4 @@
-"""Holder share changes the prices imply (#27, ADR 0009 amendment of 2026-10-02).
+"""Holder share changes the prices imply (#27, #28, ADR 0009 amendments of 2026-10-02 and 2026-10-03).
 
 At the ``runner.run(TraderConfig)`` seam. CRSP's ``adjClose`` is chained
 from its total return ``ret``, so ``adjClose[t] / adjClose[p]``, with p the
@@ -11,9 +11,11 @@ share change the venue did not book:
 - a day without a usable factor (none at all, or one that disagrees with the
   return) whose price-implied factor
   ``x = (adjClose[t] / adjClose[p] * close[p] - divCash[t]) / close[t]``
-  lies outside ``[1 / 1.2, 1.2]`` is booked as an ``IMPLIED_SPLIT``: whole
-  shares and cash in lieu as for a split, a queued order rescaled by x;
-- a smaller disagreement (more than 1%) is logged as ``MISMATCH``.
+  lies below ``1 / 1.2`` (a reverse split) is booked as an ``IMPLIED_SPLIT``:
+  whole shares and cash in lieu as for a split, a queued order rescaled by x;
+- any other disagreement (more than 1%), an x above 1.2 included (#28: a
+  collapse with a missing return), is logged as ``MISMATCH`` and the raw
+  price move is realised.
 
 Raw prices (open = close), ``--`` no price, ``adjClose`` CRSP-chained:
 
@@ -302,4 +304,52 @@ def test_a_distribution_on_a_row_without_an_adjusted_close_is_netted_alike(tmp_p
     )
     parity_dir = parity(quantlab_run, output_dir=tmp_path / "parity")
 
+    assert json.loads((parity_dir / "parity.json").read_text())["checks"]["T_equals_L5"]["passed"]
+
+
+def test_a_collapse_without_a_return_is_realised_and_logged_not_booked(tmp_path):
+    """20010 halts on bar 2 and reopens at 0.50, down from 10, with a NaN
+    return, so adjClose stays flat (10, 10, --, 10) and the implied factor is
+    x = 10 / 0.5 = 20: a share increase that would preserve value the holder
+    lost (#28). Only the reverse-split shape (x below 1 / 1.2) is booked; this
+    day is logged as MISMATCH, the 100 shares stay 100 and the loss is
+    realised at the raw price. 20011 (100 @10, fee 1) trades on every bar.
+    Cash 10 000 - 1 000 - 1 - 1 000 - 1 = 7 998.
+    """
+    from quantlab_trader.parity import parity
+
+    bars = BARS[:4]
+    close = {20010: [10.0, 10.0, NAN, 0.5], 20011: [10.0] * 4}
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", bars, close, close,
+        {20010: [0.1, NAN, NAN, NAN], 20011: [0.1, NAN, NAN, NAN]},
+        variables={
+            "adjClose": {20010: [10.0, 10.0, NAN, 10.0], 20011: [10.0] * 4},
+            "splitFactor": {20010: [1.0, 1.0, NAN, 1.0], 20011: [1.0] * 4},
+            "cumfacshr": {20010: [1.0, 1.0, NAN, 1.0], 20011: [1.0] * 4},
+            "divCash": {20010: [0.0, 0.0, NAN, 0.0], 20011: [0.0] * 4},
+        },
+    )
+    expected = [10_000.0, 9_998.0, 9_998.0, 7_998.0 + 100 * 0.5 + 1_000]
+    run_dir = run(
+        TraderConfig(
+            quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
+            output_dir=str(tmp_path / "trader"),
+        )
+    )
+    parity_dir = parity(quantlab_run, output_dir=tmp_path / "parity")
+
+    equity = xr.open_zarr(run_dir / "equity.zarr").load()["value"].values
+    np.testing.assert_allclose(equity, expected, rtol=0, atol=1e-6)
+    assert _corporate_actions(run_dir) == [
+        {"type": "corporate_action", "action": "MISMATCH", "timestamp": "2024-01-05",
+         "symbol": 20010, "quantity": 100, "amount": 0.0, "split_factor": 1.0,
+         "share_factor": 1.0, "implied_factor": 20.0},
+    ]
+    trader = json.loads((run_dir / "metrics.json").read_text())["execution"]["trader"]
+    assert trader["implied_splits"] == {"count": 0, "share_change": 0}
+    with xr.open_zarr(parity_dir / "parity.zarr") as data:
+        np.testing.assert_allclose(
+            data["equity"].sel(rung="L5").values, expected, rtol=0, atol=1e-6
+        )
     assert json.loads((parity_dir / "parity.json").read_text())["checks"]["T_equals_L5"]["passed"]

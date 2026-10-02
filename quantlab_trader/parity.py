@@ -888,8 +888,9 @@ def _holder_days(
     is ``x = (worth - paid - units * divCash) / (units * close)``. A bar
     the factors leave alone (no factor kind) becomes a split by
     ``splitFactor`` when that agrees with x (``PRICE_FACTOR_RTOL``) and a
-    factor exists, else a split by x when x lies beyond
-    ``IMPLIED_SPLIT_TOL`` either way; a final event (k = 0) stays the
+    factor exists, else a split by x when x lies below
+    ``1 / (1 + IMPLIED_SPLIT_TOL)``, the reverse-split shape only (#28: a
+    share increase would preserve value lost in a collapse); a final event (k = 0) stays the
     delisting path's. Returns ``kind`` with those bars
     marked ``"SPLIT"`` and the holder factor of every split (NaN elsewhere).
     """
@@ -899,7 +900,7 @@ def _holder_days(
     holder = np.where(kind == "SPLIT", k, np.nan)
     units, paid = np.ones(n_symbols), np.zeros(n_symbols)
     anchor_close, anchor_adj = np.full(n_symbols, np.nan), np.full(n_symbols, np.nan)
-    limit = 1.0 + IMPLIED_SPLIT_TOL
+    reverse_split_bound = 1.0 / (1.0 + IMPLIED_SPLIT_TOL)
     for i in range(n_bars):
         priced = np.isfinite(close[i]) & np.isfinite(adj[i])
         if i > 0:
@@ -918,7 +919,7 @@ def _holder_days(
                     & (np.abs(k[i] - 1.0) > FACTOR_RTOL * np.maximum(k[i], 1.0))
                 )
                 agrees = has_factor & (np.abs(x - k[i]) <= PRICE_FACTOR_RTOL * np.maximum(x, k[i]))
-                implied = (x > limit) | (x < 1.0 / limit)
+                implied = x < reverse_split_bound
                 by_factor = open_ & agrees
                 by_prices = open_ & ~agrees & implied
             holder[i] = np.where(by_factor, k[i], np.where(by_prices, x, holder[i]))

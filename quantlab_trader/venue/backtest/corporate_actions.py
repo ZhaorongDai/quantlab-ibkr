@@ -25,10 +25,11 @@ position held at the prior close:
   booked on rows between them), is the holder's share change that conserves value. A factor day
   whose ``splitFactor`` agrees with x (``PRICE_FACTOR_RTOL``) is a holder
   split by ``splitFactor`` even when the share factor disagrees; a day
-  without a usable factor whose x lies outside
-  ``[1 / (1 + IMPLIED_SPLIT_TOL), 1 + IMPLIED_SPLIT_TOL]`` is an
-  **implied split** booked as a split by x (``IMPLIED_SPLIT``); a smaller
-  disagreement above ``PRICE_FACTOR_RTOL`` is logged as ``MISMATCH``;
+  without a usable factor whose x lies below ``1 / (1 + IMPLIED_SPLIT_TOL)``
+  (the reverse-split shape: price up, shares down) is an **implied split**
+  booked as a split by x (``IMPLIED_SPLIT``); any other disagreement above
+  ``PRICE_FACTOR_RTOL``, an x above the band included, is logged as
+  ``MISMATCH`` and the raw price move is realised (#28);
 - **delisting** (quantlab ADR 0014): a venue fill closing the delisted
   holding at its last valuation on the bar after its delisting bar. CRSP
   books a cash merger's payment as a distribution (``dlynonorddivamt``) on
@@ -91,8 +92,9 @@ FACTOR_RTOL = 1e-4
 #: a day without a usable factor is logged as a ``MISMATCH``. Measured on the
 #: market store 2020-2024: on every ordinary day the two agree within 1e-4.
 PRICE_FACTOR_RTOL = 0.01
-#: A price-implied share change is booked when it exceeds this, either way:
-#: ``x > 1 + IMPLIED_SPLIT_TOL`` or ``x < 1 / (1 + IMPLIED_SPLIT_TOL)`` (#27).
+#: A price-implied share change is booked when ``x < 1 / (1 + IMPLIED_SPLIT_TOL)``,
+#: the reverse-split shape (#27, #28). A share *increase* is never implied: with
+#: a missing return across a collapse it would preserve value the holder lost.
 IMPLIED_SPLIT_TOL = 0.2
 #: Slack of the share floors against binary rounding (300 * (1/3) is 99.99...).
 _SHARE_EPS = 1e-9
@@ -150,8 +152,9 @@ def reconcile_with_prices(
     Only a day the factors leave alone (``None`` or ``"OTHER"``) changes: a
     factor day whose ``splitFactor`` agrees with the price-implied factor
     becomes a ``"SPLIT"`` by ``splitFactor``; otherwise an implied factor
-    beyond ``IMPLIED_SPLIT_TOL`` makes it an ``"IMPLIED_SPLIT"``, and one
-    beyond ``PRICE_FACTOR_RTOL`` makes a day without a factor a
+    below ``1 / (1 + IMPLIED_SPLIT_TOL)`` (a reverse split) makes it an
+    ``"IMPLIED_SPLIT"``, and any other one beyond ``PRICE_FACTOR_RTOL``,
+    above the band included (#28), makes a day without a factor a
     ``"MISMATCH"`` (logged only).
 
     Parameters
@@ -172,6 +175,8 @@ def reconcile_with_prices(
     'IMPLIED_SPLIT'
     >>> reconcile_with_prices(None, 1.0, 10 / 11), reconcile_with_prices(None, 1.0, 1.00005)
     ('MISMATCH', None)
+    >>> reconcile_with_prices(None, 1.0, 70.00 / 0.13)  # a collapse with a missing return
+    'MISMATCH'
     >>> reconcile_with_prices("OTHER", 0.9, 1.0), reconcile_with_prices("SPLIT", 2.0, 1.0)
     ('OTHER', 'SPLIT')
     """
@@ -186,7 +191,7 @@ def reconcile_with_prices(
         and math.isclose(x, k, rel_tol=PRICE_FACTOR_RTOL)
     ):
         return "SPLIT"
-    if max(x, 1.0 / x) > 1.0 + IMPLIED_SPLIT_TOL:
+    if x < 1.0 / (1.0 + IMPLIED_SPLIT_TOL):
         return "IMPLIED_SPLIT"
     if kind is None and not math.isclose(x, 1.0, rel_tol=PRICE_FACTOR_RTOL):
         return "MISMATCH"

@@ -109,7 +109,8 @@ The rule, on a day the factors leave alone (no factor day, or `OTHER`):
   `PRICE_FACTOR_RTOL = 1%` is a holder **split by `splitFactor`**, the price factor CRSP's `ret`
   uses, whatever the share factor says (18217: k 0.035404, x 0.035395);
 - otherwise, if `x > 1 + IMPLIED_SPLIT_TOL` or `x < 1 / (1 + IMPLIED_SPLIT_TOL)` with
-  `IMPLIED_SPLIT_TOL = 0.2`, the day is an **implied split** by x: event kind `IMPLIED_SPLIT`
+  `IMPLIED_SPLIT_TOL = 0.2`, the day is an **implied split** by x (only `x < 1 / (1 + IMPLIED_SPLIT_TOL)`
+  since the amendment of 2026-10-03, #28): event kind `IMPLIED_SPLIT`
   (venue fill tag `CORPORATE_ACTION_IMPLIED_SPLIT`), booked exactly as a split (whole shares
   toward zero, cash in lieu at the pre-split close / x, a queued next-open order rescaled by x,
   floor); `metrics.json` counts them under `execution.trader.implied_splits`;
@@ -137,3 +138,22 @@ PERMNO 90090 2023-03-13, 70.00 to 0.13, x 538), the implied split conserves the 
 as `adjClose` does, not the loss the raw prices show. That is a data question for quantlab's
 `adjClose` (a missing return counts as 0), not for the venue; the run's `events.json` lists every
 `IMPLIED_SPLIT` fill (date, PERMNO, share change) so such days can be audited.
+
+## Amendment (2026-10-03, implied splits only for the reverse-split shape, #28)
+
+The review of the #27 work found the "known cost" above to be a defect, not a data footnote
+([#28](https://github.com/ZhaorongDai/quantlab-trader/issues/28)): when CRSP's `ret` is missing
+across a collapse that is not a delisting (90090 2023-03-13, 70.00 to 0.13, x 538), quantlab
+chains the missing return as 0, `adjClose` stays flat, and booking x > 1 as an implied split
+**adds shares that preserve value the holder actually lost**. No venue does that, so the backtest
+no longer behaves as live would.
+
+The rule of the 2026-10-02 amendment changes in one place: a day without a usable factor is an
+implied split only when `x < 1 / (1 + IMPLIED_SPLIT_TOL)`, the reverse-split shape (price up,
+shares down; 14051's ~1:67 after a halt, the 4 reverse splits with a finite `ret`). An x above
+`1 + IMPLIED_SPLIT_TOL` is logged as `MISMATCH` with its `implied_factor`, books nothing, and the
+holding is valued at the raw prices, so the loss is realised. Splits by `splitFactor` on agreeing
+`OTHER` days, `DISTRIBUTION`, `FINAL`, dividends and delistings are unchanged; the parity ledger
+(L3) applies the same rule independently. The run's equity can now differ from quantlab's on such
+days, since quantlab values the holding at `adjClose`; that gap is the quantlab-side data question
+and is attributed by the parity ladder, not hidden by the venue.
