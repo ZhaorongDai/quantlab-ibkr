@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Any, Literal, Self
 
 import pandas as pd
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
-from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.config import LoggingConfig, RiskEngineConfig
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import AccountType, OmsType
@@ -57,7 +56,7 @@ MAX_ORDER_SUBMIT_RATE = "1000000/00:00:01"
 _AFTER_LAST_CLOSE = pd.Timedelta(hours=1)
 
 #: Each ``ExecutionConfig.fee_model`` name and how it is built from the run.
-_FEE_MODELS: dict[str, Callable[[QuantlabRun], FeeModel]] = {
+_FEE_MODELS: dict[str, Callable[[QuantlabRun], FractionFeeModel | IbkrFixedFeeModel]] = {
     "fraction": lambda run: FractionFeeModel(run.fees),
     "ibkr_fixed": lambda run: IbkrFixedFeeModel(),
 }
@@ -209,14 +208,7 @@ class BacktestVenue(Venue):
         self.fee_model = fee_model
         self.fill_model = fill_model
         self.init_cash = init_cash
-        self.source = BacktestDecisionSource(
-            run,
-            request.start,
-            request.end,
-            request.permnos,
-            predictions=request.predictions,
-            history_start=request.history_start,
-        )
+        self.source = BacktestDecisionSource(run, request)
         calendar = self.source.calendar()
         self.resolver = BacktestResolver(request.permnos, calendar[0])
         self.corporate_actions = corporate_action_days(self.source.prices)

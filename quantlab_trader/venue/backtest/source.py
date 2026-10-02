@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Hashable, Sequence
+from collections.abc import Hashable
 from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
-import xarray as xr
 
-from quantlab_trader.base.venue import DecisionInputs, DecisionSource
+from quantlab_trader.base.venue import DecisionInputs, DecisionSource, ReplayRequest
 from quantlab_trader.quantlab_run import QuantlabRun
 from quantlab_trader.venue.backtest.resolver import PRICE_PRECISION
 
@@ -65,27 +64,16 @@ class BacktestDecisionSource(DecisionSource):
     ----------
     run : QuantlabRun
         The run whose price dataset is read.
-    start, end : pandas.Timestamp
-        The window, inclusive.
-    permnos : Sequence
-        The securities the strategy can trade.
-    predictions : xarray.Dataset, optional
-        The prediction panel over the window, one variable per label on
-        ``(timestamp, symbol)``.
-    history_start : pandas.Timestamp, optional
-        The first bar of the decision-price history; ``start`` by default.
+    request : ReplayRequest
+        The window (inclusive), the securities the strategy can trade and,
+        closed loop, the prediction panel over the window (one variable per
+        label on ``(timestamp, symbol)``) and the first bar of the
+        decision-price history (``start`` when unset).
     """
 
-    def __init__(
-        self,
-        run: QuantlabRun,
-        start: pd.Timestamp,
-        end: pd.Timestamp,
-        permnos: Sequence,
-        *,
-        predictions: xr.Dataset | None = None,
-        history_start: pd.Timestamp | None = None,
-    ):
+    def __init__(self, run: QuantlabRun, request: ReplayRequest):
+        start, end, permnos = request.start, request.end, request.permnos
+        predictions, history_start = request.predictions, request.history_start
         dataset = run.price_dataset
         fill_column = run.market["fill_price_column"]
         valuation_column = run.market["valuation_price_column"]

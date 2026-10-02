@@ -13,7 +13,9 @@ venue package and changes nothing else:
 quantlab_trader/
   base/config.py        TraderConfig, root VenueConfig (frozen dataclasses, get_config/from_config)
   base/venue.py         Venue and its four parts (InstrumentResolver, OpenSubmitter,
-                        DecisionSource, DecisionClock); DecisionInputs, NextOpenOrder
+                        DecisionSource, DecisionClock); DecisionInputs, NextOpenOrder;
+                        Loop, ReplayRequest (what VenueConfig.build is asked to run) and
+                        VenueReport (what Venue.run returns, e.g. minimum-fee fills, #29)
   quantlab_run.py       QuantlabRun.load(run_dir): the only reader of a quantlab run directory
   calendar.py           RebalanceCalendar: which bars rebalance, anchored on the run
   decision.py           DecisionCycle: targets -> whole-share next-open orders; TargetSource

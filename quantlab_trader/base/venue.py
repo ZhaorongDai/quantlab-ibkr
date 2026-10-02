@@ -96,7 +96,7 @@ class ReplayRequest:
     permnos : tuple
         The securities the strategy can trade (quantlab's symbol labels).
     loop : Loop
-        The replay's loop; the backtest venue picks its default fee model
+        The replay's loop (a string is converted to its ``Loop``); the backtest venue picks its default fee model
         from it (ADR 0003).
     predictions : xarray.Dataset or None
         Closed loop: the prediction panel over the window, whose rows the
@@ -123,6 +123,9 @@ class ReplayRequest:
     predictions: xr.Dataset | None = None
     history_start: pd.Timestamp | None = None
 
+    def __post_init__(self):
+        object.__setattr__(self, "loop", Loop(self.loop))
+
 
 @dataclass(frozen=True)
 class VenueReport:
@@ -131,10 +134,12 @@ class VenueReport:
     Attributes
     ----------
     minimum_fee_orders : frozenset of str
-        Client order ids of the fills charged the venue's minimum
-        commission, counted in a trader run's
+        Client order ids of the orders whose fill was charged the venue's
+        minimum commission, counted in a trader run's
         ``execution.trader.minimum_fee_hits``; empty for a venue without a
-        minimum.
+        minimum. Keyed by order because the backtest venue fills an order
+        whole; a venue that fills in parts reports only orders whose every
+        fill hit the minimum.
 
     Examples
     --------
