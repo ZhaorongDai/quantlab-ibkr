@@ -25,7 +25,11 @@ from quantlab_trader.base.config import VenueConfig
 from quantlab_trader.base.venue import Venue
 from quantlab_trader.quantlab_run import QuantlabRun
 from quantlab_trader.venue.backtest.clock import BacktestDecisionClock
-from quantlab_trader.venue.backtest.corporate_actions import CorporateActionModule
+from quantlab_trader.venue.backtest.corporate_actions import (
+    CorporateActionModule,
+    corporate_action_days,
+    holder_split_factors,
+)
 from quantlab_trader.venue.backtest.feed import (
     CLOSE_TIME,
     build_feed,
@@ -171,7 +175,12 @@ class BacktestVenue(Venue):
         self.source = BacktestDecisionSource(run, start, end, permnos)
         calendar = self.source.calendar()
         self.resolver = BacktestResolver(permnos, calendar[0])
-        self.submitter = BacktestOpenSubmitter(calendar, opening_prints(self.source.prices))
+        self.corporate_actions = corporate_action_days(self.source.prices)
+        self.submitter = BacktestOpenSubmitter(
+            calendar,
+            opening_prints(self.source.prices),
+            holder_split_factors(self.corporate_actions),
+        )
         self.clock = BacktestDecisionClock(calendar)
 
     def run(self, strategy: PortfolioStrategy) -> None:
@@ -190,7 +199,10 @@ class BacktestVenue(Venue):
                 fee_model=FractionFeeModel(self.fee_rate),
                 modules=[
                     CorporateActionModule(
-                        self.source.delisting_settlements(), self.resolver
+                        self.corporate_actions,
+                        self.source.delisting_settlements(),
+                        self.resolver,
+                        on_event=strategy.on_corporate_action,
                     )
                 ],
             )

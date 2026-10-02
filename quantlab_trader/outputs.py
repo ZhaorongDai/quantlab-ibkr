@@ -11,12 +11,14 @@
 - ``orders.zarr``: one row per next-open order on ``order``: ``decision_date``,
   ``symbol``, ``side``, ``quantity``, ``status`` (``filled``,
   ``partially_filled``, ``unfilled``, ``rejected``, ``denied``, or
-  ``submitted``/``pending`` for an order the run ended on),
+  ``submitted``/``pending`` for an order the run ended on; ``quantity`` is
+  the submitted one, rescaled across a split),
   ``filled_quantity``, ``fill_price`` (volume-weighted), ``fee`` and
   ``reason``;
 - ``events.json``: ``{"events": [...]}``, each with a ``type``: holds, rule
-  events, unfilled orders and corporate actions (venue fills, which are
-  never in ``orders.zarr``).
+  events, unfilled orders and corporate actions: venue fills (``side``,
+  ``quantity``, ``price``, ``fee``; never in ``orders.zarr``), cash bookings
+  and logged factor days (``quantity`` held, ``amount`` of cash).
 
 The directory is written under a temporary name and renamed when complete, so
 a failed run leaves no half-written directory.
@@ -93,10 +95,20 @@ class RunRecorder:
             )
 
     def order_submitted(self, order: NextOpenOrder, client_order_id: str) -> None:
-        """Link the venue's order id to the next-open order it carries."""
+        """Link the venue's order id to the next-open order it carries.
+
+        An order the venue rescaled across a split (ADR 0009) is recorded at
+        the quantity submitted, its decided quantity kept in ``reason``.
+        """
         row = self._order_rows[(order.permno, order.decision_date)]
         self._client_rows[client_order_id] = row
-        self._orders[row]["status"] = "submitted"
+        record = self._orders[row]
+        record["status"] = "submitted"
+        if order.quantity != record["quantity"]:
+            record["reason"] = (
+                f"rescaled across a split from {record['quantity']} decided shares"
+            )
+            record["quantity"] = order.quantity
 
     def order_filled(self, client_order_id: str, *, price: float, quantity: int, fee: float) -> None:
         """Add one fill to its order; fills of other orders are ignored."""
@@ -140,7 +152,8 @@ class RunRecorder:
         Parameters
         ----------
         action : str
-            The kind, from the fill's ``CORPORATE_ACTION_<KIND>`` tag (``DELIST``).
+            The kind, from the fill's ``CORPORATE_ACTION_<KIND>`` tag
+            (``DELIST``, ``SPLIT``).
         ts_ns : int
             The fill's UNIX nanoseconds; the event is dated in the market's time zone.
         permno : Hashable
@@ -163,6 +176,46 @@ class RunRecorder:
                 "quantity": quantity,
                 "price": price,
                 "fee": fee,
+            }
+        )
+
+    def corporate_action_cash(
+        self,
+        action: str,
+        *,
+        ts_ns: int,
+        permno: Hashable,
+        quantity: int,
+        amount: float,
+        **detail,
+    ) -> None:
+        """Record a corporate action booked without a fill, or a logged factor day.
+
+        Parameters
+        ----------
+        action : str
+            ``DIVIDEND``, ``CASH_IN_LIEU``, ``DISTRIBUTION``, or a logged
+            ``FINAL``/``OTHER`` factor day (``amount`` 0).
+        ts_ns : int
+            When the venue applied it; dated in the market's time zone.
+        permno : Hashable
+            The security.
+        quantity : int
+            The signed holding it applied to.
+        amount : float
+            Cash moved into the account; negative when paid out.
+        **detail
+            Facts of the action, recorded as given.
+        """
+        self._events.append(
+            {
+                "type": "corporate_action",
+                "action": action,
+                "timestamp": _day(pd.Timestamp(ts_ns, tz="UTC").tz_convert(MARKET_TZ)),
+                "symbol": _json_scalar(permno),
+                "quantity": quantity,
+                "amount": amount,
+                **detail,
             }
         )
 

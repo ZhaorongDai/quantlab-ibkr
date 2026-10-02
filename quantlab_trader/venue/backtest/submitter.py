@@ -8,17 +8,23 @@ whose security has no opening print that day (a halt, or nothing left to trade
 after a delisting) is not submitted: it is a rejected order in quantlab's ADR
 0014 sense, reported unfilled and the holding is kept. An order decided on the
 window's last bar has no next open and is reported unfilled too.
+
+An order queued across a holder split was sized in pre-split shares: it is
+submitted as ``floor(quantity * k)`` shares, the same economic quantity in the
+new unit (ADR 0009). One that rounds to no share is reported unfilled.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+import dataclasses
+from collections.abc import Hashable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 import pandas as pd
 from nautilus_trader.model.enums import TimeInForce
 
 from quantlab_trader.base.venue import NextOpenOrder, OpenSubmitter
+from quantlab_trader.venue.backtest.corporate_actions import split_shares
 from quantlab_trader.venue.backtest.feed import OPEN_TIME, session_ns
 
 if TYPE_CHECKING:
@@ -28,6 +34,8 @@ if TYPE_CHECKING:
 NO_NEXT_OPEN = "no next open in the backtest window"
 #: Reason recorded for an order whose security has no opening print on its fill bar.
 NO_OPENING_PRINT = "no opening print on {date}"
+#: Reason recorded for an order a split rescaled to no share.
+SPLIT_TO_ZERO = "rescaled to 0 shares by the split on {date}"
 
 
 class BacktestOpenSubmitter(OpenSubmitter):
@@ -40,11 +48,19 @@ class BacktestOpenSubmitter(OpenSubmitter):
     opening_prints : pandas.DataFrame
         Booleans on ``(timestamp, symbol)``: the feed carries an opening print
         of the security on that bar.
+    split_factors : Mapping, optional
+        The holder split factor ``k`` by ``(ex-date, permno)``.
     """
 
-    def __init__(self, calendar: pd.DatetimeIndex, opening_prints: pd.DataFrame):
+    def __init__(
+        self,
+        calendar: pd.DatetimeIndex,
+        opening_prints: pd.DataFrame,
+        split_factors: Mapping[tuple[pd.Timestamp, Hashable], float] | None = None,
+    ):
         self._calendar = pd.DatetimeIndex(calendar)
         self._opening_prints = opening_prints
+        self._split_factors = dict(split_factors or {})
         self._strategy: PortfolioStrategy | None = None
 
     def attach(self, strategy: PortfolioStrategy) -> None:
@@ -73,13 +89,22 @@ class BacktestOpenSubmitter(OpenSubmitter):
         """Submit the queued orders as DAY market orders, in queue order.
 
         An order whose security had no opening print on ``bar`` is reported
-        unfilled instead.
+        unfilled instead; one across a split on ``bar`` is rescaled first.
         """
         opens_on_bar = self._opening_prints.loc[bar]
         for order in orders:
-            if opens_on_bar.get(order.permno, False):
-                self._strategy.submit_next_open(order, TimeInForce.DAY)
-            else:
+            if not opens_on_bar.get(order.permno, False):
                 self._strategy.on_next_open_unfilled(
                     order, NO_OPENING_PRINT.format(date=bar.date())
                 )
+                continue
+            k = self._split_factors.get((bar, order.permno))
+            if k is not None:
+                quantity = split_shares(order.quantity, k)
+                if quantity == 0:
+                    self._strategy.on_next_open_unfilled(
+                        order, SPLIT_TO_ZERO.format(date=bar.date())
+                    )
+                    continue
+                order = dataclasses.replace(order, quantity=quantity)
+            self._strategy.submit_next_open(order, TimeInForce.DAY)

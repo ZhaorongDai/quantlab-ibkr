@@ -21,9 +21,17 @@ from quantlab.base.data import MarketDataset
 from quantlab.utils.module import load_dataset_from_config
 
 #: Price variables trader cannot execute without: the raw open (fills) and
-#: close (sizing and the equity mark), and the adjusted close (decision prices,
-#: ADR 0002).
-REQUIRED_PRICE_VARIABLES: tuple[str, ...] = ("open", "close", "adjClose")
+#: close (sizing and the equity mark), the adjusted close (decision prices,
+#: ADR 0002), and the corporate-action fields the backtest venue books splits,
+#: value distributions and dividends from (ADR 0009).
+REQUIRED_PRICE_VARIABLES: tuple[str, ...] = (
+    "open",
+    "close",
+    "adjClose",
+    "splitFactor",
+    "cumfacshr",
+    "divCash",
+)
 
 
 @dataclass(frozen=True)
@@ -110,7 +118,8 @@ class QuantlabRun:
             raise ValueError(
                 f"quantlab run {run_dir}: the price dataset "
                 f"{type(dataset).__name__} lacks {missing}; trader executes on raw "
-                f"open/close and decides on adjClose (ADR 0002)"
+                f"open/close, decides on adjClose (ADR 0002) and books corporate "
+                f"actions from splitFactor, cumfacshr and divCash (ADR 0009)"
             )
         return cls(
             run_dir=run_dir,

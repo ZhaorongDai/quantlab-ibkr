@@ -92,6 +92,40 @@ class PortfolioStrategy(Strategy):
         """Record a next-open order that ended without a fill; the holding is kept."""
         self.recorder.order_unfilled(order, reason)
 
+    def on_corporate_action(
+        self,
+        action: str,
+        *,
+        ts_ns: int,
+        permno,
+        quantity: int,
+        amount: float,
+        **detail,
+    ) -> None:
+        """Record a corporate action the venue applied to a holding without a fill.
+
+        Cash it moved (``DIVIDEND``, ``CASH_IN_LIEU``, ``DISTRIBUTION``) or a
+        factor day it left the holding alone on (``FINAL``, ``OTHER``).
+
+        Parameters
+        ----------
+        action : str
+            The kind.
+        ts_ns : int
+            When it was applied, UNIX nanoseconds.
+        permno : Hashable
+            The security.
+        quantity : int
+            The signed holding it applied to.
+        amount : float
+            Cash moved into the account (negative: paid out).
+        **detail
+            Facts of the action (``per_share``, ``split_factor``, ...).
+        """
+        self.recorder.corporate_action_cash(
+            action, ts_ns=ts_ns, permno=permno, quantity=quantity, amount=amount, **detail
+        )
+
     def on_order_filled(self, event) -> None:
         """Record a fill of one of the strategy's orders, or a venue fill as an event.
 

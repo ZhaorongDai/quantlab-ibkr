@@ -1,39 +1,63 @@
-"""The backtest venue's corporate actions, booked as venue fills (ADR 0009).
+"""The backtest venue's corporate actions, booked at 09:30 ET of the ex-date (ADR 0009).
 
 ``CorporateActionModule`` is a nautilus ``SimulationModule`` holding a
-schedule built from the run's price dataset. It acts at 09:30 ET of the day an
-action takes effect, after that timestamp's opening prints and before the
-open + 1 ns next-open orders (ADR 0003). Each action is a **venue fill**: a
-``MarketOrder`` carrying the position's trader and strategy ids and a
+schedule built from the run's price dataset (``corporate_action_days``). It
+acts at 09:30 ET of the day an action takes effect, after that timestamp's
+opening prints and before the open + 1 ns next-open orders (ADR 0003), on the
+position held at the prior close:
+
+- **dividend** (``divCash != 0``): ``divCash * signed_qty`` in cash through
+  ``exchange.adjust_account`` (a short pays);
+- **holder split** (finite ``k > 0``, ``k != 1``, ``k`` equal to the share
+  factor ``cumfacshr[t-1] / cumfacshr[t]``, ``k = splitFactor``): a venue fill
+  of ``floor(|q| * k) - |q|`` shares (toward zero for a short) at price 0, so
+  no cash moves, and the fraction as cash in lieu at the pre-split close / k;
+- **value distribution** (``k > 1``, share factor 1: a spin-off and the like):
+  ``q * (k - 1) * close[t]`` in cash, on top of that day's ``divCash``; no
+  position is opened in the distributed security;
+- **final event** (``k = 0``, a merger or liquidation): nothing; the holding
+  is settled by the delisting path. It is logged, as is any **other** factor
+  day, which leaves the position alone;
+- **delisting** (quantlab ADR 0014): a venue fill closing the delisted
+  holding at its last valuation on the bar after its delisting bar.
+
+A dividend on a split's ex-date is paid on the shares held at the prior
+close, before the split. Each fill is a **venue fill**: a ``MarketOrder``
+carrying the position's trader and strategy ids and a
 ``CORPORATE_ACTION_<KIND>`` tag, added to the cache, marked submitted and
 accepted through the venue's execution client and filled with
 ``OrderMatchingEngine.apply_fills``, the path nautilus's own expiration
 settlement uses. The strategy hears an ordinary ``OrderFilled`` for an order
 it never submitted and records it as a venue event; every trader fee model
-charges nothing for it.
-
-Booked so far: the delisting settlement (quantlab ADR 0014), closing a
-delisted holding at its last valuation on the bar after its delisting bar.
+charges nothing for it. Cash movements and logged days reach the strategy
+through ``on_corporate_action``.
 
 nautilus runs a module only on timestamps that carry data, so an action
 falls due at the first data timestamp at or after 09:30: on a bar where no
 instrument has an opening print it is booked at that bar's close instead.
-Nothing is lost: the delisted security itself has no opening print after its
-delisting bar, so no next-open order on it can fill before the settlement.
+Nothing is lost: a security without an opening print has no next-open order
+filled before its action.
 """
 
 from __future__ import annotations
 
+import math
 import uuid
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Callable, Hashable, Sequence
+from dataclasses import dataclass
+from typing import Literal
 
+import numpy as np
+import pandas as pd
+import xarray as xr
 from nautilus_trader.backtest.config import SimulationModuleConfig
 from nautilus_trader.backtest.modules import SimulationModule
 from nautilus_trader.core.uuid import UUID4
+from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import LiquiditySide, OrderSide, TimeInForce
 from nautilus_trader.model.identifiers import ClientOrderId, VenueOrderId
-from nautilus_trader.model.objects import Price, Quantity
+from nautilus_trader.model.objects import Money, Price, Quantity
 from nautilus_trader.model.orders import MarketOrder
 
 from quantlab_trader.base.venue import CORPORATE_ACTION_TAG
@@ -41,37 +65,264 @@ from quantlab_trader.venue.backtest.feed import OPEN_TIME, session_ns
 from quantlab_trader.venue.backtest.resolver import PRICE_PRECISION, BacktestResolver
 from quantlab_trader.venue.backtest.source import DelistingSettlement
 
+#: Relative tolerance of "equal" factors (the price and share factors of a
+#: holder split, a factor and 1), as the measurements on #17 used.
+FACTOR_RTOL = 1e-4
+#: Slack of the share floors against binary rounding (300 * (1/3) is 99.99...).
+_SHARE_EPS = 1e-9
 
-class CorporateActionModule(SimulationModule):
-    """Book the window's corporate actions on the strategy's positions as venue fills.
+#: What a factor day is (ADR 0009 amendment); ``None`` for no factor day.
+FactorKind = Literal["SPLIT", "DISTRIBUTION", "FINAL", "OTHER"]
+
+
+def classify_factor_day(split_factor: float, share_factor: float) -> FactorKind | None:
+    """Return what a day with these price and share factors is.
 
     Parameters
     ----------
+    split_factor : float
+        ``splitFactor`` of the day, ``cumfacpr[t-1] / cumfacpr[t]``.
+    share_factor : float
+        ``cumfacshr[t-1] / cumfacshr[t]``.
+
+    Examples
+    --------
+    >>> classify_factor_day(2.0, 2.0), classify_factor_day(1 / 3, 1 / 3)
+    ('SPLIT', 'SPLIT')
+    >>> classify_factor_day(1.25, 1.0), classify_factor_day(0.0, float("inf"))
+    ('DISTRIBUTION', 'FINAL')
+    >>> classify_factor_day(0.9, 1.0), classify_factor_day(1.0, 1.0) is None
+    ('OTHER', True)
+    >>> classify_factor_day(float("nan"), float("nan")) is None  # a halt
+    True
+    """
+    k, s = float(split_factor), float(share_factor)
+    if k == 0.0:
+        return "FINAL"
+    k_moves = not np.isnan(k) and not math.isclose(k, 1.0, rel_tol=FACTOR_RTOL)
+    s_moves = not np.isnan(s) and not math.isclose(s, 1.0, rel_tol=FACTOR_RTOL)
+    if not (k_moves or s_moves):
+        return None
+    if math.isfinite(k) and k > 0 and k_moves and math.isfinite(s) and math.isclose(
+        k, s, rel_tol=FACTOR_RTOL
+    ):
+        return "SPLIT"
+    if math.isfinite(k) and k > 1 and k_moves and math.isfinite(s) and not s_moves:
+        return "DISTRIBUTION"
+    return "OTHER"
+
+
+def split_shares(quantity: int, k: float) -> int:
+    """Return the whole shares ``quantity`` becomes in a holder split by ``k``, toward zero.
+
+    Examples
+    --------
+    >>> split_shares(500, 1 / 3), split_shares(-625, 1.5), split_shares(300, 1 / 3)
+    (166, -937, 100)
+    """
+    shares = math.floor(abs(quantity) * k + _SHARE_EPS)
+    return shares if quantity >= 0 else -shares
+
+
+@dataclass(frozen=True)
+class CorporateActionDay:
+    """One security's ex-date: a factor day, a dividend, or both.
+
+    Attributes
+    ----------
+    permno : Hashable
+        The security.
+    date : pandas.Timestamp
+        The ex-date t.
+    kind : {"SPLIT", "DISTRIBUTION", "FINAL", "OTHER"} or None
+        What the factors make the day (``classify_factor_day``); ``None`` for
+        a dividend alone.
+    split_factor : float
+        ``splitFactor[t]``, the holder split factor ``k`` of a split.
+    share_factor : float
+        ``cumfacshr[t-1] / cumfacshr[t]``, the last share factor before t
+        when t-1 has none.
+    dividend : float
+        ``divCash[t]`` per share; 0 for none.
+    pre_close : float
+        The last raw close before t.
+    close : float
+        The raw close of t; NaN without one.
+    """
+
+    permno: Hashable
+    date: pd.Timestamp
+    kind: FactorKind | None
+    split_factor: float
+    share_factor: float
+    dividend: float
+    pre_close: float
+    close: float
+
+    @property
+    def distribution_price(self) -> float:
+        """The price a value distribution's per-share cash is ``k - 1`` times.
+
+        The raw close of t; without one, the pre-split close / k, which is
+        what the close of t is when the price falls by exactly the
+        distribution.
+        """
+        if np.isfinite(self.close):
+            return float(self.close)
+        return float(self.pre_close) / float(self.split_factor)
+
+
+def corporate_action_days(prices: xr.Dataset) -> tuple[CorporateActionDay, ...]:
+    """Return the panel's corporate-action days after its first bar, in time order.
+
+    The first bar has none: no position is open before the first next-open
+    fill, at the open of the second bar.
+
+    Parameters
+    ----------
+    prices : xarray.Dataset
+        The run's price panel on ``(timestamp, symbol)`` with raw ``close``,
+        ``splitFactor``, ``cumfacshr`` and ``divCash``.
+    """
+
+    def frame(name: str) -> pd.DataFrame:
+        return prices[name].transpose("timestamp", "symbol").to_pandas().astype(float)
+
+    split_factor, dividend, close = frame("splitFactor"), frame("divCash"), frame("close")
+    cumfacshr = frame("cumfacshr")
+    with np.errstate(divide="ignore", invalid="ignore"):
+        share_factor = cumfacshr.ffill().shift(1) / cumfacshr
+    pre_close = close.ffill().shift(1)
+    days = []
+    for bar in range(1, len(split_factor.index)):
+        date = split_factor.index[bar]
+        for column, permno in enumerate(split_factor.columns):
+            k, s = split_factor.iat[bar, column], share_factor.iat[bar, column]
+            cash = dividend.iat[bar, column]
+            cash = float(cash) if np.isfinite(cash) else 0.0
+            kind = classify_factor_day(k, s)
+            if kind is None and cash == 0.0:
+                continue
+            days.append(
+                CorporateActionDay(
+                    permno=permno,
+                    date=pd.Timestamp(date),
+                    kind=kind,
+                    split_factor=float(k),
+                    share_factor=float(s),
+                    dividend=cash,
+                    pre_close=float(pre_close.iat[bar, column]),
+                    close=float(close.iat[bar, column]),
+                )
+            )
+    return tuple(days)
+
+
+def holder_split_factors(
+    days: Sequence[CorporateActionDay],
+) -> dict[tuple[pd.Timestamp, Hashable], float]:
+    """Return ``k`` of every holder split, by ``(ex-date, permno)``: what rescales a queued order."""
+    return {(day.date, day.permno): day.split_factor for day in days if day.kind == "SPLIT"}
+
+
+#: Called with ``(action, ts_ns=, permno=, quantity=, amount=, **detail)`` for
+#: an action booked without a fill (cash) or logged.
+CorporateActionSink = Callable[..., None]
+
+
+class CorporateActionModule(SimulationModule):
+    """Book the window's corporate actions on the strategy's positions.
+
+    Parameters
+    ----------
+    days : Sequence of CorporateActionDay
+        The ex-dates, booked at their 09:30 ET.
     delistings : Sequence of DelistingSettlement
         The delisted securities, settled at the open of their settlement date.
     resolver : BacktestResolver
         Maps each security to its instrument.
+    on_event : callable, optional
+        Hears every action booked without a fill and every logged day (the
+        strategy's ``on_corporate_action``).
     """
 
-    def __init__(self, delistings: Sequence[DelistingSettlement], resolver: BacktestResolver):
+    def __init__(
+        self,
+        days: Sequence[CorporateActionDay],
+        delistings: Sequence[DelistingSettlement],
+        resolver: BacktestResolver,
+        on_event: CorporateActionSink | None = None,
+    ):
         super().__init__(SimulationModuleConfig())
         self._resolver = resolver
-        self._delistings = deque(
-            sorted(delistings, key=lambda settlement: settlement.settlement_date)
-        )
+        self._on_event = on_event or (lambda *args, **kwargs: None)
+        due = [(session_ns(day.date, OPEN_TIME), day.date, day) for day in days]
+        due += [
+            (session_ns(s.settlement_date, OPEN_TIME), s.delisting_date, s)
+            for s in delistings
+        ]
+        self._due = deque(sorted(due, key=lambda item: item[0]))
 
     def process(self, ts_now: int) -> None:
         """Book every action due at or before ``ts_now`` (09:30 ET of its day)."""
-        while (
-            self._delistings
-            and session_ns(self._delistings[0].settlement_date, OPEN_TIME) <= ts_now
-        ):
-            settlement = self._delistings.popleft()
-            instrument_id = self._resolver.instrument_id(
-                settlement.permno, settlement.delisting_date
-            )
+        while self._due and self._due[0][0] <= ts_now:
+            _, as_of, action = self._due.popleft()
+            instrument_id = self._resolver.instrument_id(action.permno, as_of)
             for position in self.cache.positions_open(None, instrument_id):
-                self._settle(position, settlement.price)
+                if isinstance(action, DelistingSettlement):
+                    self._settle(position, action.price)
+                else:
+                    self._book(position, action, ts_now)
+
+    def _book(self, position, day: CorporateActionDay, ts_now: int) -> None:
+        """Book ``day`` on ``position``: its dividend, then its factor day."""
+        quantity = int(round(position.signed_qty))
+        if not quantity:
+            return
+        report = dict(ts_ns=ts_now, permno=day.permno, quantity=quantity)
+        if day.dividend:
+            amount = self._credit(quantity * day.dividend)
+            self._on_event("DIVIDEND", amount=amount, per_share=day.dividend, **report)
+        if day.kind == "SPLIT":
+            self._split(position, quantity, day, report)
+        elif day.kind == "DISTRIBUTION":
+            amount = self._credit(
+                quantity * (day.split_factor - 1.0) * day.distribution_price
+            )
+            self._on_event(
+                "DISTRIBUTION", amount=amount, split_factor=day.split_factor, **report
+            )
+        elif day.kind is not None:
+            self._on_event(
+                day.kind,
+                amount=0.0,
+                split_factor=_json_float(day.split_factor),
+                share_factor=_json_float(day.share_factor),
+                **report,
+            )
+
+    def _split(self, position, quantity: int, day: CorporateActionDay, report: dict) -> None:
+        """A price-0 venue fill of the share-count change plus cash in lieu of the fraction."""
+        k = day.split_factor
+        shares = split_shares(quantity, k)
+        delta = shares - quantity
+        if delta:
+            side = OrderSide.BUY if delta > 0 else OrderSide.SELL
+            self._venue_fill(position, side, abs(delta), 0.0, "SPLIT")
+        fraction = quantity * k - shares
+        if fraction and np.isfinite(day.pre_close):
+            amount = self._credit(fraction * day.pre_close / k)
+            if amount:
+                self._on_event(
+                    "CASH_IN_LIEU", amount=amount, split_factor=k, **report
+                )
+
+    def _credit(self, amount: float) -> float:
+        """Move ``amount`` (cents) into the account; return what was moved."""
+        amount = round(float(amount), 2)
+        if amount:
+            self.exchange.adjust_account(Money(amount, USD))
+        return amount
 
     def _settle(self, position, price: float) -> None:
         """Close ``position`` at ``price``: the delisting settlement."""
@@ -120,3 +371,8 @@ class CorporateActionModule(SimulationModule):
 
     def reset(self) -> None:
         """Nothing to reset: the schedule is built once per engine."""
+
+
+def _json_float(value: float) -> float | None:
+    """Return ``value``, or ``None`` where JSON has no number for it."""
+    return float(value) if math.isfinite(value) else None
