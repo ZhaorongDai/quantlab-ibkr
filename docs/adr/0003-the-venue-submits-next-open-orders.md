@@ -43,9 +43,11 @@ puts on the execution side; it never changes a quantity.
 - Submit `AT_THE_OPEN` in both modes and turn it into an open fill inside nautilus. Rejected: the
   matching engine is Cython and rejects the time in force in a `cdef` method that cannot be
   overridden from Python. An `ExecAlgorithm` that receives the on-open order and spawns a market
-  child at the open does run, but the strategy's own order never reaches a venue: it stays
-  `INITIALIZED` with its quantity reduced to zero while a child order `...-E1` carries the fills,
-  so the order life cycle the strategy sees differs from live, which defeats the purpose.
+  child at the open fills at the open (verified), but the strategy's own order never reaches a
+  venue: spawning its whole quantity with `reduce_primary=True` raises (an order cannot be
+  updated to quantity 0), and with `reduce_primary=False` it stays `INITIALIZED` for good while
+  a child order `...-E1` carries the fill. The order life cycle the strategy sees then differs
+  from live, which defeats the purpose.
 - Plain market orders in both modes, submitted at the open. Rejected: live it is a continuous-
   session market order, not the opening auction, and needs a process awake at 09:30 instead of
   orders queued the evening before.
