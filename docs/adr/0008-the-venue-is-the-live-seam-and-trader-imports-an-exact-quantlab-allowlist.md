@@ -25,7 +25,8 @@ quantlab_trader/
   strategy.py           PortfolioStrategy: the one nautilus Strategy, backtest and live
   outputs.py            RunRecorder: the trader run directory
   runner.py             run(config): wires run, venue, strategy and recorder
-  parity.py             parity ladder and report (ADR 0007); the only module that may
+  parity/               parity ladder and report (ADR 0007): ladder.py (the driver),
+                        one module per step (#32); the only package that may
                         import quantlab's backtest layer
   cli.py                `quantlab-trader backtest` (and `parity`, #9)
   venue/backtest/       venue.py (BacktestVenue), feed.py, resolver.py, submitter.py,
@@ -71,10 +72,10 @@ window's first bar for `run()`, the first fold's for `run_cv()`). Narrowing trad
 `quantlab.base.tracking`, `quantlab.utils.backtest_report`, and the public returns-statistics
 module ADR 0007 has quantlab add for `metrics.json`. At run time it also loads, by class path from
 `config.json`, the rule's module (`quantlab.portfolio.*`), the price dataset's module
-(`quantlab.dataset.*`) and the tracker's (`quantlab.tracking.*`). The one exception is `parity.py`,
-which may also import quantlab's backtest layer to run the ladder's quantlab rungs (ADR 0007).
-`tests/test_quantlab_boundary.py` locks both: an ast scan of every trader module but `parity.py`
-against the allowlist, and a subprocess that loads a fixture run and runs one decision through
+(`quantlab.dataset.*`) and the tracker's (`quantlab.tracking.*`). The one exception is the `parity`
+package, which may also import quantlab's backtest layer to run the ladder's quantlab rungs (ADR 0007).
+`tests/test_quantlab_boundary.py` locks both: an ast scan of every trader module outside
+`parity/` against the allowlist, and a subprocess that loads a fixture run and runs one decision through
 `runner.py`, then asserts that no `quantlab.model`, `quantlab.factor`, `quantlab.label`,
 `quantlab.backtest`, `torch`, `xgboost`, `KunQuant` or `vectorbt` is in `sys.modules`.
 

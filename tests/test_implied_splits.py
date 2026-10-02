@@ -224,7 +224,7 @@ def test_metrics_count_implied_splits_apart_from_splits(replay):
 
 @pytest.fixture(scope="module")
 def ladder(tmp_path_factory):
-    from quantlab_trader.parity import parity
+    from quantlab_trader.parity.ladder import parity
 
     root = tmp_path_factory.mktemp("implied_splits_parity")
     parity_dir = parity(build_run(root), output_dir=root / "parity")
@@ -251,7 +251,7 @@ def test_a_split_on_a_row_without_a_price_is_not_booked_again_by_the_prices(tmp_
     every bar, so bar 2 has data and its 09:30 actions are booked on it.
     Cash 10 000 - 5 000 - 5 - 1 000 - 1 = 3 994.
     """
-    from quantlab_trader.parity import parity
+    from quantlab_trader.parity.ladder import parity
 
     bars = BARS[:4]
     close = {20006: [50.0, 50.0, NAN, 25.5], 20007: [10.0] * 4}
@@ -288,7 +288,7 @@ def test_a_distribution_on_a_row_without_an_adjusted_close_is_netted_alike(tmp_p
     """20008 pays a value distribution (k 1.25) on bar 1, a row with a raw close
     of 6 but no adjClose; both the venue and the reference ledger pay it at
     that close and net it out of bar 2's implied factor, so T equals L5."""
-    from quantlab_trader.parity import parity
+    from quantlab_trader.parity.ladder import parity
 
     bars = BARS[:4]
     close = {20008: [10.0, 6.0, 8.2, 8.1], 20009: [10.0] * 4}
@@ -316,7 +316,7 @@ def test_a_collapse_without_a_return_is_realised_and_logged_not_booked(tmp_path)
     realised at the raw price. 20011 (100 @10, fee 1) trades on every bar.
     Cash 10 000 - 1 000 - 1 - 1 000 - 1 = 7 998.
     """
-    from quantlab_trader.parity import parity
+    from quantlab_trader.parity.ladder import parity
 
     bars = BARS[:4]
     close = {20010: [10.0, 10.0, NAN, 0.5], 20011: [10.0] * 4}

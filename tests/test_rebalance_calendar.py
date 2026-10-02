@@ -1,8 +1,9 @@
 """``RebalanceCalendar`` re-implements quantlab's ``rebalance_mask``; this locks them together.
 
-trader cannot import quantlab's backtest layer outside ``parity.py`` (ADR
-0008), so the calendar counts rebalance bars itself. Anchored on a window's
-first bar, it must mark exactly the bars ``rebalance_mask`` marks.
+trader cannot import quantlab's backtest layer outside the ``parity``
+package (ADR 0008), so the calendar counts rebalance bars itself. Anchored
+on a window's first bar, it must mark exactly the bars ``rebalance_mask``
+marks.
 """
 
 import pandas as pd

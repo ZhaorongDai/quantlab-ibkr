@@ -102,7 +102,7 @@ quantlab's names but are not parity quantities.
   close through `val_price`), and the returns-based statistics and turnover rows of
   `metrics.json` move into a public function in a module that imports neither the model nor the
   dataset layer, which trader's metrics call.
-- trader's parity module is the only trader module allowed to import quantlab's backtest layer;
+- trader's parity package is the only trader package allowed to import quantlab's backtest layer;
   a layout test locks that the strategy, venues and run path do not.
 - A parity run uses the quantlab run's rebalance bars, whatever the calendar anchor decided later
   for live.

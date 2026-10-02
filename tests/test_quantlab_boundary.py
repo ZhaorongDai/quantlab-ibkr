@@ -3,16 +3,17 @@
 Two locks:
 
 - an ``ast`` scan of every trader module: each ``import`` of quantlab names a
-  module on ``ALLOWED`` (or a name inside one); ``parity.py`` alone may also
-  import quantlab's backtest layer, to run the ladder's quantlab rungs
-  (ADR 0007);
+  module on ``ALLOWED`` (or a name inside one); the modules of the
+  ``parity`` package alone may also import quantlab's backtest layer, to
+  run the ladder's quantlab rungs (ADR 0007);
 - a subprocess that replays a fixture run through ``runner.run`` and then
   finds none of quantlab's model, factor, label or backtest layers, nor torch,
   xgboost, KunQuant or vectorbt, in ``sys.modules``, open loop and closed
   loop (TopN; mean-variance with Ledoit-Wolf, which loads cvxpy), with the
-  command line imported (it imports ``parity`` only inside the ``parity``
-  command). The rule's, dataset's and tracker's modules may still load by
-  class path from ``config.json``.
+  command line imported (it imports the ``parity`` package only inside the
+  ``parity`` command), and no module of the ``parity`` package either. The
+  rule's, dataset's and tracker's modules may still load by class path from
+  ``config.json``.
 """
 
 import ast
@@ -76,19 +77,21 @@ def _quantlab_imports(path: Path) -> list[str]:
     return found
 
 
-#: The one module allowed to import quantlab's backtest layer, too.
-PARITY = PACKAGE / "parity.py"
+#: The one package whose modules may import quantlab's backtest layer, too.
+PARITY = PACKAGE / "parity"
 
 
 def _allowed(path: Path, name: str) -> bool:
     if name in ALLOWED:
         return True
-    return path == PARITY and (name == "quantlab.backtest" or name.startswith("quantlab.backtest."))
+    return PARITY in path.parents and (
+        name == "quantlab.backtest" or name.startswith("quantlab.backtest.")
+    )
 
 
 def test_trader_source_imports_only_the_quantlab_allowlist():
     modules = list(PACKAGE.rglob("*.py"))
-    assert len(modules) > 10 and PARITY in modules
+    assert len(modules) > 10 and (PARITY / "ladder.py") in modules
 
     offending = {
         str(p.relative_to(PACKAGE)): name
@@ -169,7 +172,10 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
             loop={loop!r}, output_dir={str(tmp_path / "trader")!r},
         ))
         loaded = [m for m in sys.modules if m.startswith({FORBIDDEN!r})]
-        loaded += [m for m in sys.modules if m == "quantlab_trader.parity"]
+        loaded += [
+            m for m in sys.modules
+            if m == "quantlab_trader.parity" or m.startswith("quantlab_trader.parity.")
+        ]
         print(json.dumps({{"run_dir": str(run_dir), "loaded": loaded}}))
         """
     )

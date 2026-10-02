@@ -43,7 +43,7 @@ from quantlab.base.portfolio import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfRiskModel
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
-from quantlab_trader.parity import parity
+from quantlab_trader.parity.ladder import parity
 from quantlab_trader.venue.backtest.venue import ExecutionConfig
 from tests.quantlab_run_fixture import ADJUSTED_SCALE, build_constructor_run, build_quantlab_run
 

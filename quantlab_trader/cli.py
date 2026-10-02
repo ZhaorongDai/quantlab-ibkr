@@ -111,7 +111,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _parity(args: argparse.Namespace) -> int:
     """Run ``quantlab-trader parity``; return the exit status."""
-    from quantlab_trader.parity import parity
+    from quantlab_trader.parity.ladder import parity
 
     try:
         execution = ExecutionConfig(
