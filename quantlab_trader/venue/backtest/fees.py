@@ -5,11 +5,28 @@ from __future__ import annotations
 from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.model.objects import Money
 
+from quantlab_trader.base.venue import CORPORATE_ACTION_TAG
+
+
+def is_fee_free(order) -> bool:
+    """Return whether ``order`` is a venue fill that no fee model charges.
+
+    Corporate-action venue fills (``CORPORATE_ACTION_*``, ADR 0009) and
+    nautilus's own expiration settlements (``EXPIRATION_*_CLOSE``) move no
+    commission.
+    """
+    return any(
+        tag.startswith(CORPORATE_ACTION_TAG)
+        or (tag.startswith("EXPIRATION_") and tag.endswith("_CLOSE"))
+        for tag in order.tags or ()
+    )
+
 
 class FractionFeeModel(FeeModel):
     """Commission as a fraction of the filled notional, quantlab's ``fees``.
 
     nautilus rounds the commission to the currency's precision (cents).
+    Corporate-action and expiration venue fills are free (``is_fee_free``).
 
     Parameters
     ----------
@@ -23,5 +40,7 @@ class FractionFeeModel(FeeModel):
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:
         """Return ``rate * fill_qty * fill_px`` in the instrument's quote currency."""
+        if is_fee_free(order):
+            return Money(0, instrument.quote_currency)
         notional = fill_qty.as_double() * fill_px.as_double()
         return Money(notional * self.rate, instrument.quote_currency)

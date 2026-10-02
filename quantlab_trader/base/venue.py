@@ -30,6 +30,16 @@ if TYPE_CHECKING:
 
     from quantlab_trader.strategy import PortfolioStrategy
 
+#: The time zone of the market every venue trades (US equities): fills and
+#: events are dated in it.
+MARKET_TZ = "America/New_York"
+
+#: Tag prefix of a venue fill: an order and fill a venue books on the
+#: strategy's position for a corporate action, tagged
+#: ``CORPORATE_ACTION_<KIND>`` (``CORPORATE_ACTION_DELIST``, ...). It is never
+#: one of the strategy's next-open orders (ADR 0009).
+CORPORATE_ACTION_TAG = "CORPORATE_ACTION"
+
 
 @dataclass(frozen=True)
 class DecisionInputs:

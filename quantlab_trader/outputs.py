@@ -15,7 +15,8 @@
   ``filled_quantity``, ``fill_price`` (volume-weighted), ``fee`` and
   ``reason``;
 - ``events.json``: ``{"events": [...]}``, each with a ``type``: holds, rule
-  events, unfilled orders.
+  events, unfilled orders and corporate actions (venue fills, which are
+  never in ``orders.zarr``).
 
 The directory is written under a temporary name and renamed when complete, so
 a failed run leaves no half-written directory.
@@ -34,7 +35,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab_trader.base.config import TraderConfig
-from quantlab_trader.base.venue import NextOpenOrder
+from quantlab_trader.base.venue import MARKET_TZ, NextOpenOrder
 from quantlab_trader.decision import CycleResult
 from quantlab_trader.quantlab_run import QuantlabRun
 
@@ -120,6 +121,31 @@ class RunRecorder:
                 "side": order.side,
                 "quantity": order.quantity,
                 "reason": reason,
+            }
+        )
+
+    def corporate_action(
+        self,
+        action: str,
+        *,
+        ts_ns: int,
+        permno: Hashable,
+        side: str,
+        quantity: int,
+        price: float,
+        fee: float,
+    ) -> None:
+        """Record a venue fill of a corporate action (``DELIST``, ...) as an event."""
+        self._events.append(
+            {
+                "type": "corporate_action",
+                "action": action,
+                "timestamp": _day(pd.Timestamp(ts_ns, tz="UTC").tz_convert(MARKET_TZ)),
+                "symbol": _json_scalar(permno),
+                "side": side,
+                "quantity": quantity,
+                "price": price,
+                "fee": fee,
             }
         )
 

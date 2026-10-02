@@ -19,7 +19,7 @@ from nautilus_trader.model.objects import Quantity
 from nautilus_trader.trading.strategy import Strategy
 
 from quantlab_trader.account import derived_cash, holdings
-from quantlab_trader.base.venue import NextOpenOrder, Venue
+from quantlab_trader.base.venue import CORPORATE_ACTION_TAG, NextOpenOrder, Venue
 from quantlab_trader.decision import DecisionCycle
 
 if TYPE_CHECKING:
@@ -93,7 +93,26 @@ class PortfolioStrategy(Strategy):
         self.recorder.order_unfilled(order, reason)
 
     def on_order_filled(self, event) -> None:
-        """Record a fill of one of the strategy's orders."""
+        """Record a fill of one of the strategy's orders, or a venue fill as an event.
+
+        A fill tagged ``CORPORATE_ACTION_<KIND>`` is a venue fill (ADR 0009):
+        the venue booked it on the strategy's position for a corporate
+        action, so it is recorded in the run's events, never as an order.
+        """
+        order = self.cache.order(event.client_order_id)
+        prefix = CORPORATE_ACTION_TAG + "_"
+        kinds = [tag[len(prefix):] for tag in (order.tags or ()) if tag.startswith(prefix)]
+        if kinds:
+            self.recorder.corporate_action(
+                kinds[0],
+                ts_ns=event.ts_event,
+                permno=self.venue.resolver.permno(event.instrument_id),
+                side=event.order_side.name,
+                quantity=int(event.last_qty.as_double()),
+                price=event.last_px.as_double(),
+                fee=event.commission.as_double(),
+            )
+            return
         self.recorder.order_filled(
             event.client_order_id.value,
             price=event.last_px.as_double(),

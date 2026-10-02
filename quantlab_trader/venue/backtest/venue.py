@@ -2,7 +2,8 @@
 
 One synthetic venue ``CRSP`` with a NETTING, MARGIN account at leverage 1 in
 USD; one ``<PERMNO>.CRSP`` equity per tradable security; the feed of opening
-and closing prints; the fee model; the open submitter and the decision clock.
+and closing prints; the fee model; the corporate-action module; the open
+submitter and the decision clock.
 """
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from quantlab_trader.base.config import VenueConfig
 from quantlab_trader.base.venue import Venue
 from quantlab_trader.quantlab_run import QuantlabRun
 from quantlab_trader.venue.backtest.clock import BacktestDecisionClock
+from quantlab_trader.venue.backtest.corporate_actions import CorporateActionModule
 from quantlab_trader.venue.backtest.feed import CLOSE_TIME, build_feed, session_ns
 from quantlab_trader.venue.backtest.fees import FractionFeeModel
 from quantlab_trader.venue.backtest.resolver import SYNTHETIC_VENUE, BacktestResolver
@@ -164,7 +166,10 @@ class BacktestVenue(Venue):
         self.source = BacktestDecisionSource(run, start, end, permnos)
         calendar = self.source.calendar()
         self.resolver = BacktestResolver(permnos, calendar[0])
-        self.submitter = BacktestOpenSubmitter(calendar)
+        opening_prints = (
+            self.source.prices["open"].transpose("timestamp", "symbol").notnull().to_pandas()
+        )
+        self.submitter = BacktestOpenSubmitter(calendar, opening_prints)
         self.clock = BacktestDecisionClock(calendar)
 
     def run(self, strategy: PortfolioStrategy) -> None:
@@ -181,6 +186,11 @@ class BacktestVenue(Venue):
                 base_currency=USD,
                 default_leverage=Decimal(1),
                 fee_model=FractionFeeModel(self.fee_rate),
+                modules=[
+                    CorporateActionModule(
+                        self.source.delisting_settlements(), self.resolver
+                    )
+                ],
             )
             for instrument in self.resolver.instruments():
                 engine.add_instrument(instrument)

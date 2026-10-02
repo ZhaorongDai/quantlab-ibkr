@@ -16,10 +16,11 @@ from nautilus_trader.model.enums import AggressorSide
 from nautilus_trader.model.identifiers import TradeId
 from nautilus_trader.model.objects import Price, Quantity
 
+from quantlab_trader.base.venue import MARKET_TZ
 from quantlab_trader.venue.backtest.resolver import PRICE_PRECISION, BacktestResolver
 
 #: The exchange time zone of the session.
-SESSION_TZ = "America/New_York"
+SESSION_TZ = MARKET_TZ
 #: Time of the opening print.
 OPEN_TIME = pd.Timedelta(hours=9, minutes=30)
 #: Time of the closing print and the daily bar.
