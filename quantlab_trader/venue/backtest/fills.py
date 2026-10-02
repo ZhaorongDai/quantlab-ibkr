@@ -10,7 +10,8 @@ from nautilus_trader.model.data import BookOrder
 from nautilus_trader.model.enums import BookType, OrderSide
 from nautilus_trader.model.objects import Price, Quantity
 
-#: Liquidity of each simulated level: enough for any order (no volume cap, ADR 0003).
+#: Liquidity of each simulated level: enough for any order; auction partial
+#: fills are not modelled (ADR 0003).
 _UNLIMITED = 10**12
 
 
@@ -53,6 +54,15 @@ class FractionSlippageFillModel(FillModel):
     ------
     ValueError
         If ``slippage`` is outside ``[0, 1)``.
+
+    Examples
+    --------
+    >>> FractionSlippageFillModel(0.001).slippage
+    0.001
+    >>> FractionSlippageFillModel(1.0)
+    Traceback (most recent call last):
+    ...
+    ValueError: slippage must lie in [0, 1), got 1.0
     """
 
     def __init__(self, slippage: float):

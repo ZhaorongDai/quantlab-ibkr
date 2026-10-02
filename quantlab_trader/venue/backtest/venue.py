@@ -9,13 +9,14 @@ submitter and the decision clock.
 from __future__ import annotations
 
 import dataclasses
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import pandas as pd
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
+from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.config import LoggingConfig
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import AccountType, OmsType
@@ -49,9 +50,15 @@ if TYPE_CHECKING:
 #: decision (at close + 1 ns) fires.
 _AFTER_LAST_CLOSE = pd.Timedelta(hours=1)
 
+#: Each ``ExecutionConfig.fee_model`` name and how it is built from the run.
+_FEE_MODELS: dict[str, Callable[[QuantlabRun], FeeModel]] = {
+    "fraction": lambda run: FractionFeeModel(run.fees),
+    "ibkr_fixed": lambda run: IbkrFixedFeeModel(),
+}
+
 #: The fee model each loop takes when ``ExecutionConfig.fee_model`` is None
-#: (ADR 0003): closed loop costs what the IBKR account will, open loop what
-#: the quantlab run charged.
+#: (#13, spec #18 stories 22-23): closed loop costs what the IBKR account
+#: will, open loop what the quantlab run charged.
 _DEFAULT_FEE_MODEL = {"closed": "ibkr_fixed", "open": "fraction"}
 
 
@@ -84,9 +91,9 @@ class ExecutionConfig:
     init_cash: float | None = None
 
     def __post_init__(self):
-        if self.fee_model not in (None, "fraction", "ibkr_fixed"):
+        if self.fee_model is not None and self.fee_model not in _FEE_MODELS:
             raise ValueError(
-                f"ExecutionConfig.fee_model must be 'fraction', 'ibkr_fixed' or None, "
+                f"ExecutionConfig.fee_model must be one of {sorted(_FEE_MODELS)} or None, "
                 f"got {self.fee_model!r}"
             )
         if self.slippage is not None and not 0.0 <= self.slippage < 1.0:
@@ -178,7 +185,8 @@ class BacktestVenue(Venue):
     Raises
     ------
     ValueError
-        If the run's own slippage lies outside ``[0, 1)``.
+        For an unknown ``loop``, or a run whose own slippage lies outside
+        ``[0, 1)``.
     """
 
     def __init__(
@@ -191,10 +199,9 @@ class BacktestVenue(Venue):
         permnos: tuple,
         loop: str,
     ):
-        fee_model = execution.fee_model or _DEFAULT_FEE_MODEL[loop]
-        self.fee_model = (
-            FractionFeeModel(run.fees) if fee_model == "fraction" else IbkrFixedFeeModel()
-        )
+        if loop not in _DEFAULT_FEE_MODEL:
+            raise ValueError(f"BacktestVenue: loop must be 'closed' or 'open', got {loop!r}")
+        self.fee_model = _FEE_MODELS[execution.fee_model or _DEFAULT_FEE_MODEL[loop]](run)
         slippage = run.slippage if execution.slippage is None else execution.slippage
         self.fill_model = FractionSlippageFillModel(slippage)
         self.init_cash = run.init_cash if execution.init_cash is None else execution.init_cash

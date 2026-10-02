@@ -57,7 +57,7 @@ class FractionFeeModel(FeeModel):
 
 
 class IbkrFixedFeeModel(FeeModel):
-    """IBKR Pro Fixed commission plus the SEC fee on sales (ADR 0003).
+    """IBKR Pro Fixed commission plus the SEC fee on sales (#13, spec #18 story 22).
 
     The commission is USD 0.005 per share, at least USD 1.00 and at most 1%
     of the trade value; a sale adds the SEC fee of 0.0000206 x its value. The
@@ -80,7 +80,7 @@ class IbkrFixedFeeModel(FeeModel):
     SEC_FEE_RATE = Decimal("0.0000206")
 
     @classmethod
-    def charge(cls, side: OrderSide, quantity, price) -> Decimal:
+    def charge(cls, side: OrderSide, quantity: Decimal | int, price: Decimal) -> Decimal:
         """Return the fee in USD, rounded to the cent, for ``quantity`` shares at ``price``."""
         value = Decimal(quantity) * Decimal(price)
         per_share = max(cls.PER_SHARE * Decimal(quantity), cls.MINIMUM)

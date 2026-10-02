@@ -43,6 +43,7 @@ import xarray as xr
 
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.runner import run
+from quantlab_trader.venue.backtest.fees import FractionFeeModel, IbkrFixedFeeModel
 from quantlab_trader.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
 from tests.quantlab_run_fixture import build_quantlab_run
 
@@ -157,10 +158,10 @@ def test_execution_overrides_round_trip_through_config_json(replay, request):
 @pytest.mark.parametrize(
     ("loop", "execution", "fee_model", "slippage", "init_cash"),
     [
-        ("closed", ExecutionConfig(), "IbkrFixedFeeModel", 0.001, 10_000.0),
-        ("open", ExecutionConfig(), "FractionFeeModel", 0.001, 10_000.0),
-        ("closed", ExecutionConfig("fraction", 0.002, 5e4), "FractionFeeModel", 0.002, 5e4),
-        ("open", ExecutionConfig(fee_model="ibkr_fixed"), "IbkrFixedFeeModel", 0.001, 10_000.0),
+        ("closed", ExecutionConfig(), IbkrFixedFeeModel, 0.001, 10_000.0),
+        ("open", ExecutionConfig(), FractionFeeModel, 0.001, 10_000.0),
+        ("closed", ExecutionConfig("fraction", 0.002, 5e4), FractionFeeModel, 0.002, 5e4),
+        ("open", ExecutionConfig(fee_model="ibkr_fixed"), IbkrFixedFeeModel, 0.001, 10_000.0),
     ],
 )
 def test_each_loop_resolves_its_default_execution(
@@ -172,7 +173,7 @@ def test_each_loop_resolves_its_default_execution(
         QuantlabRun.load(quantlab_run), start=BARS[0], end=BARS[-1], permnos=(10001,), loop=loop
     )
 
-    assert type(venue.fee_model).__name__ == fee_model
+    assert type(venue.fee_model) is fee_model
     assert (venue.fill_model.slippage, venue.init_cash) == (slippage, init_cash)
 
 
