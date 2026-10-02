@@ -59,3 +59,17 @@ counts and equity match an independent ledger after every close for splitFactor 
 - Live, IBKR books splits and dividends itself; how they reach nautilus (fills, position
   reports, account updates) and what IBKR does to an on-open order across a split are for the
   live effort.
+
+## Amendment (2026-10-01, split-factor research)
+
+CRSP's price factor alone does not give a holder's share count
+([research](https://github.com/ZhaorongDai/quantlab-trader/issues/16)). The venue therefore uses
+the **holder split factor** `k`, booked only on days where `splitFactor ≈ shareFactor`
+(`shareFactor = cumfacshr[t-1] / cumfacshr[t]`, from the dataset's `cumfacshr` variable): `k`
+drives the split venue fill, cash in lieu (pre-split close / k) and the open submitter's rescale of
+a queued order. A day with `splitFactor > 1` and `shareFactor = 1` is a **value distribution**
+(spin-off and the like): the share count is unchanged and the holder is credited
+`q · (splitFactor - 1) · close[t]` in cash at the next open, unless the same value is already in
+`divCash` that day (guard against double counting). The schedule skips non-finite factors; any
+other factor day leaves the position alone and is logged. No position is opened in a spin-off's
+new PERMNO. Event frequencies and the `divCash` overlap are still to be measured on real CRSP data.
