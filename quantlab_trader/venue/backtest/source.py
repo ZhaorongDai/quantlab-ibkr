@@ -95,7 +95,7 @@ class BacktestDecisionSource(DecisionSource):
             .load()
             .to_pandas()
         )
-        self._valuation = history[valuation_column].transpose("timestamp", "symbol").load()
+        self._decision_prices = history[valuation_column].transpose("timestamp", "symbol").load()
         self._delisted = dataset.delisting_bars(prices, valuation_column).to_pandas()
         raw_close = prices["close"].transpose("timestamp", "symbol").to_pandas()
         last_value = self._last_valuation(
@@ -155,6 +155,6 @@ class BacktestDecisionSource(DecisionSource):
             predictions=predictions,
             tradable=self._tradable.loc[t],
             close=self._close.loc[t],
-            decision_prices=self._valuation.sel(timestamp=slice(None, t)),
+            decision_prices=self._decision_prices.sel(timestamp=slice(None, t)),
             delisted=self._delisted.loc[t],
         )
