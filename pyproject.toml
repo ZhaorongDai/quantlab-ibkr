@@ -1,0 +1,17 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "quantlab-trader"
+version = "0.1.0"
+description = "Event-driven backtesting and live trading of quantlab strategies on NautilusTrader."
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "quantlab",
+    "nautilus-trader>=1.231.0",
+]
+
+[tool.uv.sources]
+quantlab = { path = "../quantlab", editable = true }
