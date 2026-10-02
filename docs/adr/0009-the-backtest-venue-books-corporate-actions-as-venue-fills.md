@@ -82,3 +82,56 @@ alone and is logged. No position is opened in a spin-off's new PERMNO. Measured 
 ([#17](https://github.com/ZhaorongDai/quantlab-trader/issues/17)): 6,721 holder-split days, 657
 value-distribution days, 5,911 final events; the store's `splitFactor` equals the `cumfacpr` ratio
 on every comparable day.
+
+## Amendment (2026-10-02, price-implied share changes, #27)
+
+The factors alone miss share changes CRSP's return knows about
+([#27](https://github.com/ZhaorongDai/quantlab-trader/issues/27)): on the market store a reverse
+split whose share factor disagrees with its price factor (PERMNO 18217, 2024-03-15) was left as
+`OTHER`, and a reverse split after a six-week halt with no factor at all (PERMNO 14051, 1:67)
+was not booked, so raw-price holdings jumped by multiples no holder had.
+
+quantlab chains `adjClose` from CRSP's total return `ret` (a missing `ret` counts as 0), so on a
+bar t with a raw close, with p the last bar before it with a raw close, the share change that
+conserves a holder's value given `adjClose`'s return is
+
+    x = (adjClose[t] / adjClose[p] * close[p] - C - Q * divCash[t]) / (Q * close[t])
+
+where `Q` and `C` are the shares and cash per share held at p that actions booked on rows
+between p and t (rows without a raw close, inside a halt) made of it; `Q = 1, C = 0` on an
+ordinary day. `divCash[t]` is paid on the pre-split shares, as the venue pays it, so a dividend
+is not counted twice, and a value distribution keeps its cash booking (its day is never checked).
+The rule, on a day the factors leave alone (no factor day, or `OTHER`):
+
+- an `OTHER` day whose `splitFactor` (moving, finite, > 0) agrees with x within
+  `PRICE_FACTOR_RTOL = 1%` is a holder **split by `splitFactor`**, the price factor CRSP's `ret`
+  uses, whatever the share factor says (18217: k 0.035404, x 0.035395);
+- otherwise, if `x > 1 + IMPLIED_SPLIT_TOL` or `x < 1 / (1 + IMPLIED_SPLIT_TOL)` with
+  `IMPLIED_SPLIT_TOL = 0.2`, the day is an **implied split** by x: event kind `IMPLIED_SPLIT`
+  (venue fill tag `CORPORATE_ACTION_IMPLIED_SPLIT`), booked exactly as a split (whole shares
+  toward zero, cash in lieu at the pre-split close / x, a queued next-open order rescaled by x,
+  floor); `metrics.json` counts them under `execution.trader.implied_splits`;
+- otherwise a day without a factor whose x differs from 1 by more than `PRICE_FACTOR_RTOL` is
+  logged as `MISMATCH` (nothing booked), and an `OTHER` day stays `OTHER`; both log x as
+  `implied_factor`.
+
+`SPLIT`, `DISTRIBUTION` and `FINAL` days, dividends and delistings are unchanged (a delisting
+row has no raw close, so it is never checked). The parity ledger (L3-L5) implements the rule
+independently, sharing only the three tolerances (ADR 0007).
+
+**Tolerance.** Measured on the market store, 2020-2024 (5.2 million no-factor days with a raw
+close and a previous one): x is within 1e-4 of 1 on all but 49 of them. 43 are more than 1% off:
+30 are booked as implied splits (4 with a finite `ret` that implies 1:20 to 1:100, 26 with a
+missing `ret` after a halt or a delisting-like collapse) and 13 are logged as `MISMATCH`
+(ordinary moves across a halt with a missing `ret`, between 2% and 20%, left to the raw prices).
+All 4 `OTHER` days have a `splitFactor` within 1% of x and become splits by it. As a check of the
+formula, x agrees with `splitFactor` within 1% on all 1,101 booked holder-split days, and with
+the price factor of all 112 value distributions. 1% is far above the ordinary noise; 20% is the
+threshold of the #27 scan. Above it the raw ledger follows `adjClose`, which is what quantlab's
+own run values the holding at.
+
+Known cost: where `ret` is missing across a collapse rather than a reverse split (for example
+PERMNO 90090 2023-03-13, 70.00 to 0.13, x 538), the implied split conserves the holder's value
+as `adjClose` does, not the loss the raw prices show. That is a data question for quantlab's
+`adjClose` (a missing return counts as 0), not for the venue; the run's `events.json` lists every
+`IMPLIED_SPLIT` fill (date, PERMNO, share change) so such days can be audited.
