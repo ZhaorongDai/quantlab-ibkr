@@ -124,10 +124,15 @@ class RungResult:
         ``(fill bar, symbol)`` of every rejected order.
     settlements : list of tuple
         ``(settlement bar, symbol, price, quantity)`` of every delisting
-        settlement of a holding; ``quantity`` is signed (the holding).
+        settlement of a holding; ``quantity`` is the signed holding, ``None``
+        where quantlab's engine does not record it (L0, L1).
     max_target_deviation : float or None
+        The largest gap between a target weight and the weight held after
+        its fill bar, at the sizing prices.
     buys_capped : int or None
-        Buys a cash cap cut (L0, L1) or would have cut (the ledger).
+        Buys a cash cap cut (L0, L1) or would have cut (the ledger: a buy
+        that leaves cash below zero, which vectorbt cuts or rejects);
+        ``None`` for T, whose run does not record cash per fill.
     peak_cash_debit : float
         The most negative end-of-bar cash, as a positive number; 0 if never.
     positions : pandas.DataFrame or None
@@ -353,13 +358,10 @@ def _resolved(execution: ExecutionConfig, run: QuantlabRun) -> ExecutionConfig:
 
 def _fingerprints_agree(recorded: dict | None, rerun: dict | None) -> bool | None:
     """Whether L0 read the price data the run recorded (its digest); ``None`` without a record."""
-    if not recorded or not rerun:
+    common = sorted(set(recorded or {}) & set(rerun or {}))
+    if not common:
         return None
-    return all(
-        rerun.get(name, {}).get("digest") == entry.get("digest")
-        for name, entry in recorded.items()
-        if name in rerun
-    )
+    return all(rerun[name].get("digest") == recorded[name].get("digest") for name in common)
 
 
 def _quantlab_rung(
@@ -650,8 +652,8 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
       ``w * equity / close - q`` shares (``trunc`` of the target with whole
       shares), none where the target is the holding's current weight.
 
-    Cash is never capped; ``buys_capped`` counts the buys that took it
-    below zero.
+    Cash is never capped; ``buys_capped`` counts the buys a cap would have
+    cut: every buy that leaves cash below zero.
     """
     timestamps, symbols = market.timestamps, market.symbols
     n_bars, n_symbols = market.weights.shape
@@ -737,7 +739,7 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
                 if side == "BUY" and cash < 0:
                     capped += 1
                 position[j] += sign * quantity
-                traded[j] += sign * quantity * decided / quantity
+                traded[j] += sign * decided  # in the decision's (pre-split) shares
                 orders.append((timestamps[i], symbols[j], side, quantity, price, fee))
             if decision is not None:
                 gap = _decision_gap(decision, traded, market.delisted[i - 1])
@@ -803,8 +805,10 @@ def _fill(open_price: float, side: str, quantity: float, conventions: _Conventio
 
 
 def _nautilus_money(value: float) -> float:
-    """``value`` at the cent as nautilus's ``Money`` stores a float: ``value * 100`` rounded
-    half away from zero, in binary (17.685 is 17.68: its double times 100 is 1768.4999...).
+    """Return ``value`` at the cent, as nautilus's ``Money`` stores a float.
+
+    ``value * 100`` rounded half away from zero, in binary: 17.685 is 17.68,
+    its double times 100 being 1768.4999...
     """
     scaled = abs(float(value) * 10**_MONEY_DECIMALS)
     whole = math.floor(scaled)
@@ -866,6 +870,7 @@ class _Statistics:
         )
 
     def row(self, rung: RungResult) -> dict:
+        """Return the report row of ``rung``: its statistics and execution counts."""
         equity = rung.equity
         previous = equity.shift(1)
         previous.iloc[0] = rung.init_cash
@@ -1029,8 +1034,10 @@ def _trader_rung(
 
 
 def _t_check(t: RungResult, l5: RungResult, trader_dir: Path) -> dict:
-    """T against L5 (ADR 0007): the same orders, fill prices at 4 decimals, fees to the
-    cent, rejections and settlements; equity within USD 0.01 per fill so far.
+    """Check T against L5 (ADR 0007).
+
+    The same orders, fill prices at 4 decimals, fees to the cent,
+    rejections and settlements; equity within USD 0.01 per fill so far.
 
     The fills counted are the next-open orders' and the venue fills
     (splits, delisting settlements) of the trader run.
@@ -1165,8 +1172,8 @@ def _closed_vs_open(
     events = json.loads((closed_dir / "events.json").read_text())["events"]
     held_bars = {pd.Timestamp(e["timestamp"]) for e in events if e.get("type") == "hold"}
     constructor = run.config.get("constructor") or {}
-    test = _HOLDING_INDEPENDENT_RULES.get(constructor.get("name"))
-    rule_independent = bool(test is not None and test(constructor))
+    is_independent_config = _HOLDING_INDEPENDENT_RULES.get(constructor.get("name"))
+    rule_independent = bool(is_independent_config and is_independent_config(constructor))
 
     timestamps = market.timestamps
     table = table.to_pandas()
@@ -1207,7 +1214,7 @@ def _closed_vs_open(
         "mean_weight_l1_distance": float(np.mean(distances)) if distances else None,
         "orders_equal": orders_equal,
         "max_equity_difference": float(
-            np.nanmax(np.abs(closed.equity.to_numpy() - t_rung.equity.to_numpy()))
+            np.max(np.abs(closed.equity.to_numpy() - t_rung.equity.to_numpy()))
         ),
         "closed_loop": closed_row,
         "delta": {
