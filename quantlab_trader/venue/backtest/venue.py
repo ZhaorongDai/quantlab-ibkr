@@ -18,7 +18,7 @@ import pandas as pd
 import xarray as xr
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FeeModel
-from nautilus_trader.config import LoggingConfig
+from nautilus_trader.config import LoggingConfig, RiskEngineConfig
 from nautilus_trader.model.currencies import USD
 from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.objects import Money
@@ -46,6 +46,12 @@ from quantlab_trader.venue.backtest.submitter import BacktestOpenSubmitter
 
 if TYPE_CHECKING:
     from quantlab_trader.strategy import PortfolioStrategy
+
+#: The risk engine's submit-rate limit. The submitter sends a whole rebalance
+#: at the open + 1 ns (ADR 0003), in one simulated instant; nautilus's
+#: default, 100 per second, denied every order past the 100th of a bar. A
+#: broker's message pacing belongs to a live venue's submitter, not here.
+MAX_ORDER_SUBMIT_RATE = "1000000/00:00:01"
 
 #: How long the engine runs past the last closing print, so the last
 #: decision (at close + 1 ns) fires.
@@ -237,7 +243,10 @@ class BacktestVenue(Venue):
     def run(self, strategy: PortfolioStrategy) -> None:
         """Build the engine, run the window through ``strategy`` and dispose of it."""
         engine = BacktestEngine(
-            BacktestEngineConfig(logging=LoggingConfig(log_level="ERROR"))
+            BacktestEngineConfig(
+                logging=LoggingConfig(log_level="ERROR"),
+                risk_engine=RiskEngineConfig(max_order_submit_rate=MAX_ORDER_SUBMIT_RATE),
+            )
         )
         try:
             engine.add_venue(

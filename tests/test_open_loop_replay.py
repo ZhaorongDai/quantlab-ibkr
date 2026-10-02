@@ -211,3 +211,28 @@ def test_the_cli_reports_a_refused_run_without_a_traceback(tmp_path, capsys):
 
     assert status == 1
     assert "quantlab-trader:" in capsys.readouterr().err
+
+
+def test_every_next_open_order_of_a_bar_is_submitted_however_many(tmp_path):
+    # nautilus's risk engine denies submissions beyond 100 per second by
+    # default; the venue submits a whole rebalance at the open + 1 ns, so a
+    # 150-security rebalance must go through in full.
+    permnos = range(20001, 20151)
+    bars = pd.bdate_range("2024-01-02", periods=3)
+    open_ = {p: [10.0, 10.0, 10.0] for p in permnos}
+    close = {p: [10.0, 10.0, 10.0] for p in permnos}
+    weights = {p: [1 / 200, NAN, NAN] for p in permnos}
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", bars, open_, close, weights, init_cash=1_000_000.0
+    )
+    run_dir = run(
+        TraderConfig(
+            quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
+            output_dir=str(tmp_path / "trader"),
+        )
+    )
+
+    orders = xr.open_zarr(run_dir / "orders.zarr").load().to_dataframe()
+    assert len(orders) == 150
+    assert (orders["status"] == "filled").all()
+    assert (orders["filled_quantity"] == 500).all()
