@@ -140,8 +140,8 @@ class CorporateActionDay:
     split_factor : float
         ``splitFactor[t]``, the holder split factor ``k`` of a split.
     share_factor : float
-        ``cumfacshr[t-1] / cumfacshr[t]``, the last share factor before t
-        when t-1 has none.
+        ``cumfacshr[t-1] / cumfacshr[t]``, with the last ``cumfacshr`` before
+        t when t-1 has none.
     dividend : float
         ``divCash[t]`` per share; 0 for none.
     pre_close : float
@@ -183,6 +183,25 @@ def corporate_action_days(prices: xr.Dataset) -> tuple[CorporateActionDay, ...]:
     prices : xarray.Dataset
         The run's price panel on ``(timestamp, symbol)`` with raw ``close``,
         ``splitFactor``, ``cumfacshr`` and ``divCash``.
+
+    Returns
+    -------
+    tuple of CorporateActionDay
+
+    Examples
+    --------
+    >>> ones = [[1.0], [1.0], [1.0]]
+    >>> panel = xr.Dataset(
+    ...     {
+    ...         "close": (("timestamp", "symbol"), [[40.0], [42.0], [127.0]]),
+    ...         "splitFactor": (("timestamp", "symbol"), [[1.0], [1.0], [1 / 3]]),
+    ...         "cumfacshr": (("timestamp", "symbol"), [[1.0], [1.0], [3.0]]),
+    ...         "divCash": (("timestamp", "symbol"), [[0.0], [0.5], [0.0]]),
+    ...     },
+    ...     coords={"timestamp": pd.bdate_range("2024-01-02", periods=3), "symbol": [10001]},
+    ... )
+    >>> [(d.date.day, d.kind, d.dividend, d.pre_close) for d in corporate_action_days(panel)]
+    [(3, None, 0.5, 40.0), (4, 'SPLIT', 0.0, 42.0)]
     """
 
     def frame(name: str) -> pd.DataFrame:
@@ -193,35 +212,61 @@ def corporate_action_days(prices: xr.Dataset) -> tuple[CorporateActionDay, ...]:
     with np.errstate(divide="ignore", invalid="ignore"):
         share_factor = cumfacshr.ffill().shift(1) / cumfacshr
     pre_close = close.ffill().shift(1)
+    dividend = dividend.where(np.isfinite(dividend), 0.0)
+    # Candidates only: classify_factor_day is per element, the panel is not.
+    k_values, s_values = split_factor.to_numpy(), share_factor.to_numpy()
+    with np.errstate(invalid="ignore"):
+        candidate = (
+            (dividend.to_numpy() != 0.0)
+            | (~np.isnan(k_values) & ~np.isclose(k_values, 1.0, rtol=FACTOR_RTOL, atol=0.0))
+            | (~np.isnan(s_values) & ~np.isclose(s_values, 1.0, rtol=FACTOR_RTOL, atol=0.0))
+        )
+    candidate[0, :] = False
     days = []
-    for bar in range(1, len(split_factor.index)):
-        date = split_factor.index[bar]
-        for column, permno in enumerate(split_factor.columns):
-            k, s = split_factor.iat[bar, column], share_factor.iat[bar, column]
-            cash = dividend.iat[bar, column]
-            cash = float(cash) if np.isfinite(cash) else 0.0
-            kind = classify_factor_day(k, s)
-            if kind is None and cash == 0.0:
-                continue
-            days.append(
-                CorporateActionDay(
-                    permno=permno,
-                    date=pd.Timestamp(date),
-                    kind=kind,
-                    split_factor=float(k),
-                    share_factor=float(s),
-                    dividend=cash,
-                    pre_close=float(pre_close.iat[bar, column]),
-                    close=float(close.iat[bar, column]),
-                )
+    for bar, column in zip(*np.nonzero(candidate)):
+        date, permno = split_factor.index[bar], split_factor.columns[column]
+        k, s = split_factor.iat[bar, column], share_factor.iat[bar, column]
+        cash = float(dividend.iat[bar, column])
+        kind = classify_factor_day(k, s)
+        if kind is None and cash == 0.0:
+            continue
+        days.append(
+            CorporateActionDay(
+                permno=permno,
+                date=pd.Timestamp(date),
+                kind=kind,
+                split_factor=float(k),
+                share_factor=float(s),
+                dividend=cash,
+                pre_close=float(pre_close.iat[bar, column]),
+                close=float(close.iat[bar, column]),
             )
+        )
     return tuple(days)
 
 
 def holder_split_factors(
     days: Sequence[CorporateActionDay],
 ) -> dict[tuple[pd.Timestamp, Hashable], float]:
-    """Return ``k`` of every holder split, by ``(ex-date, permno)``: what rescales a queued order."""
+    """Return ``k`` of every holder split, by ``(ex-date, permno)``: what rescales a queued order.
+
+    Parameters
+    ----------
+    days : Sequence of CorporateActionDay
+        The window's ex-dates (``corporate_action_days``).
+
+    Returns
+    -------
+    dict
+
+    Examples
+    --------
+    >>> day = CorporateActionDay(
+    ...     10001, pd.Timestamp("2024-01-04"), "SPLIT", 2.0, 2.0, 0.0, 52.0, 27.0
+    ... )
+    >>> holder_split_factors([day])
+    {(Timestamp('2024-01-04 00:00:00'), 10001): 2.0}
+    """
     return {(day.date, day.permno): day.split_factor for day in days if day.kind == "SPLIT"}
 
 
@@ -244,6 +289,15 @@ class CorporateActionModule(SimulationModule):
     on_event : callable, optional
         Hears every action booked without a fill and every logged day (the
         strategy's ``on_corporate_action``).
+
+    Examples
+    --------
+    Built by ``BacktestVenue.run`` and handed to ``add_venue(modules=...)``;
+    an empty schedule books nothing:
+
+    >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+    >>> module = CorporateActionModule((), (), BacktestResolver((), pd.Timestamp("2024-01-02")))
+    >>> module.process(0)
     """
 
     def __init__(

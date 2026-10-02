@@ -170,7 +170,7 @@ class RunRecorder:
             {
                 "type": "corporate_action",
                 "action": action,
-                "timestamp": _day(pd.Timestamp(ts_ns, tz="UTC").tz_convert(MARKET_TZ)),
+                "timestamp": _market_day(ts_ns),
                 "symbol": _json_scalar(permno),
                 "side": side,
                 "quantity": quantity,
@@ -211,7 +211,7 @@ class RunRecorder:
             {
                 "type": "corporate_action",
                 "action": action,
-                "timestamp": _day(pd.Timestamp(ts_ns, tz="UTC").tz_convert(MARKET_TZ)),
+                "timestamp": _market_day(ts_ns),
                 "symbol": _json_scalar(permno),
                 "quantity": quantity,
                 "amount": amount,
@@ -223,6 +223,8 @@ class RunRecorder:
         """Mark an order the venue rejected or the risk engine denied."""
         row = self._client_rows.get(client_order_id)
         if row is not None:
+            earlier = self._orders[row]["reason"]
+            reason = f"{earlier}; {reason}" if earlier else reason
             self._orders[row].update(status=status, reason=reason)
 
     def write(self) -> Path:
@@ -300,6 +302,11 @@ class RunRecorder:
 
 def _day(t: pd.Timestamp) -> str:
     return pd.Timestamp(t).strftime("%Y-%m-%d")
+
+
+def _market_day(ts_ns: int) -> str:
+    """Return the market-time-zone date of UNIX nanoseconds ``ts_ns``."""
+    return _day(pd.Timestamp(ts_ns, tz="UTC").tz_convert(MARKET_TZ))
 
 
 def _json_scalar(value):

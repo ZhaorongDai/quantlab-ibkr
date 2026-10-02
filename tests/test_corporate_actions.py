@@ -264,3 +264,47 @@ def test_a_price_dataset_without_corporate_action_fields_is_refused(tmp_path, mi
     with pytest.raises(ValueError, match=missing):
         run(config)
     assert not (tmp_path / "trader").exists()
+
+
+def test_a_split_after_a_halt_with_a_dividend_and_an_order_rescaled_to_nothing(tmp_path):
+    """10001 is halted on bar 2 and goes 1:3 on bar 3 with a 0.30 dividend; 10002
+    goes 1:3 on bar 3 too, across a queued sale of 2 pre-split shares.
+
+    - bar 1 open: +100 of 10001 @50 and +100 of 10002 @25, fees 7.50: cash 2 492.50.
+    - close of bar 2: 10001 has no price (marked 51); sell 2 of 10002 (target
+      trunc(0.2584 * 10 292.50 / 27) = 98).
+    - bar 3 09:30: 10001's dividend on the 100 pre-split shares, +30; its split
+      100 -> 33 with cash in lieu at the last close before the halt, 1 * 51;
+      10002's split 100 -> 33, cash in lieu 1 * 27: cash 2 600.50. The sale of
+      2 pre-split shares is floor(2 / 3) = 0 shares: unfilled.
+    """
+    bars = BARS[:5]
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", bars,
+        {10001: [49, 50, NAN, 155, 156], 10002: [24, 25, 26, 80, 81]},
+        {10001: [50, 51, NAN, 156, 157], 10002: [25, 26, 27, 81, 82]},
+        {10001: [0.5, NAN, NAN, NAN, NAN], 10002: [0.25, NAN, 0.2584, NAN, NAN]},
+        variables={
+            "splitFactor": {10001: [1, 1, NAN, 1 / 3, 1], 10002: [1, 1, 1, 1 / 3, 1]},
+            "cumfacshr": {10001: [1, 1, NAN, 3, 3], 10002: [1, 1, 1, 3, 3]},
+            "divCash": {10001: [0, 0, NAN, 0.3, 0], 10002: [0.0] * 5},
+        },
+    )
+    run_dir = run(
+        TraderConfig(
+            quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
+            output_dir=str(tmp_path / "trader"),
+        )
+    )
+
+    equity = xr.open_zarr(run_dir / "equity.zarr").load()["value"].values
+    np.testing.assert_allclose(
+        equity,
+        [10_000.0, 10_192.50, 10_292.50, 2_600.50 + 33 * 156 + 33 * 81, 2_600.50 + 33 * 157 + 33 * 82],
+        rtol=0, atol=1e-6,
+    )
+    cash = {(e["symbol"], e["action"]): e["amount"] for e in _corporate_actions(run_dir) if "amount" in e}
+    assert cash == {(10001, "DIVIDEND"): 30.0, (10001, "CASH_IN_LIEU"): 51.0, (10002, "CASH_IN_LIEU"): 27.0}
+    sale = _orders(run_dir).query("symbol == 10002 and side == 'SELL'").iloc[0]
+    assert (sale["quantity"], sale["status"], sale["filled_quantity"]) == (2, "unfilled", 0)
+    assert "0 shares" in sale["reason"]
