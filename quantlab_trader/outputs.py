@@ -31,7 +31,6 @@ a failed run leaves no half-written directory.
 from __future__ import annotations
 
 import json
-import math
 import shutil
 from collections.abc import Callable, Hashable
 from datetime import datetime
@@ -43,6 +42,7 @@ import xarray as xr
 
 from quantlab.utils import backtest_stats
 from quantlab.utils.backtest_report import write_backtest_report
+from quantlab_trader._support.jsonable import jsonable, python_scalar
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.base.venue import MARKET_TZ, Loop, NextOpenOrder, VenueReport
 from quantlab_trader.decision import CycleResult
@@ -109,7 +109,7 @@ class RunRecorder:
                 if decided is None
                 else pd.Series(
                     decided.values.astype(float),
-                    index=[_json_scalar(v) for v in decided["symbol"].values],
+                    index=[python_scalar(v) for v in decided["symbol"].values],
                 ),
                 current_weights=result.current_weights,
                 equity=result.equity,
@@ -119,7 +119,7 @@ class RunRecorder:
             return
         weights = result.decision.weights
         self._decisions[t] = pd.Series(
-            weights.values, index=[_json_scalar(v) for v in weights["symbol"].values]
+            weights.values, index=[python_scalar(v) for v in weights["symbol"].values]
         )
         if result.decision.failure is not None:
             self._events.append(
@@ -130,7 +130,7 @@ class RunRecorder:
             if isinstance(value, (int, np.integer)):
                 event["count"] = int(value)
             else:
-                event["symbols"] = [_json_scalar(v) for v in value]
+                event["symbols"] = [python_scalar(v) for v in value]
             self._events.append(event)
         for order in result.orders:
             self._order_rows[(order.permno, order.decision_date)] = len(self._orders)
@@ -212,7 +212,7 @@ class RunRecorder:
             {
                 "type": "unfilled_order",
                 "decision_date": _day(order.decision_date),
-                "symbol": _json_scalar(order.permno),
+                "symbol": python_scalar(order.permno),
                 "side": order.side,
                 "quantity": order.quantity,
                 "reason": reason,
@@ -254,7 +254,7 @@ class RunRecorder:
                 "type": "corporate_action",
                 "action": action,
                 "timestamp": _market_day(ts_ns),
-                "symbol": _json_scalar(permno),
+                "symbol": python_scalar(permno),
                 "side": side,
                 "quantity": quantity,
                 "price": price,
@@ -295,7 +295,7 @@ class RunRecorder:
                 "type": "corporate_action",
                 "action": action,
                 "timestamp": _market_day(ts_ns),
-                "symbol": _json_scalar(permno),
+                "symbol": python_scalar(permno),
                 "quantity": quantity,
                 "amount": amount,
                 **detail,
@@ -365,7 +365,7 @@ class RunRecorder:
             .to_pandas()
             .ffill()
         )
-        closes.columns = [_json_scalar(v) for v in closes.columns]
+        closes.columns = [python_scalar(v) for v in closes.columns]
         benchmark = run.benchmark()
         fills = self._fills_dataset(report)
         self.metrics = run_metrics(
@@ -387,7 +387,7 @@ class RunRecorder:
             notes=NOTES,
         )
         (directory / "metrics.json").write_text(
-            json.dumps(_jsonable(self.metrics), indent=2)
+            json.dumps(jsonable(self.metrics), indent=2)
         )
         report_benchmark = {}
         if benchmark is not None:
@@ -517,36 +517,3 @@ def _market_day(ts_ns: int) -> str:
     """Return the market-time-zone date of UNIX nanoseconds ``ts_ns``."""
     return _day(pd.Timestamp(ts_ns, tz="UTC").tz_convert(MARKET_TZ))
 
-
-def _jsonable(value):
-    """Return ``value`` as strict JSON values, as quantlab's ``to_jsonable`` does.
-
-    NaN, infinities and NaT become ``None``, timestamps ISO strings,
-    timedeltas their ``str``, numpy scalars Python ones.
-    """
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if value is None or value is pd.NaT:
-        return None
-    if isinstance(value, (np.datetime64, np.timedelta64)):
-        if np.isnat(value):
-            return None
-        value = pd.Timestamp(value) if isinstance(value, np.datetime64) else pd.Timedelta(value)
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    if isinstance(value, pd.Timedelta):
-        return str(value)
-    if isinstance(value, (bool, np.bool_)):
-        return bool(value)
-    if isinstance(value, (int, np.integer)):
-        return int(value)
-    if isinstance(value, (float, np.floating)):
-        return float(value) if math.isfinite(value) else None
-    return value
-
-
-def _json_scalar(value):
-    """Return ``value`` as a JSON-serialisable scalar (numpy scalars unwrapped)."""
-    return value.item() if hasattr(value, "item") else value

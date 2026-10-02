@@ -44,6 +44,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.utils import backtest_stats
+from quantlab_trader._support.jsonable import python_scalar
 
 #: Order statuses of a next-open order that ended without a fill.
 UNFILLED_STATUSES = ("unfilled", "rejected", "denied")
@@ -367,7 +368,7 @@ def _rejected_orders(orders: xr.Dataset, calendar: pd.DatetimeIndex) -> dict:
         fill_bar = _fill_bar(orders["decision_date"].values[row], calendar)
         if fill_bar is None:
             continue
-        symbol = str(_scalar(orders["symbol"].values[row]))
+        symbol = str(python_scalar(orders["symbol"].values[row]))
         rejected.append(
             {
                 "symbol": symbol,
@@ -429,7 +430,7 @@ def _max_target_deviation(
             orders["decided_quantity"].values[row] / quantity
         )
         sign = 1.0 if str(orders["side"].values[row]) == "BUY" else -1.0
-        key = (pd.Timestamp(orders["decision_date"].values[row]), _scalar(orders["symbol"].values[row]))
+        key = (pd.Timestamp(orders["decision_date"].values[row]), python_scalar(orders["symbol"].values[row]))
         filled[key] = filled.get(key, 0.0) + sign * float(shares)
 
     gaps = []
@@ -515,7 +516,7 @@ def _trades(fills: xr.Dataset, events: Sequence[Mapping]) -> list[_Trade]:
             (
                 pd.Timestamp(fills["timestamp"].values[row]),
                 1,
-                _scalar(fills["symbol"].values[row]),
+                python_scalar(fills["symbol"].values[row]),
                 int(fills["size"].values[row]),
             )
         )
@@ -560,7 +561,3 @@ def _trade_counts(trades: Sequence[_Trade], ranges) -> dict:
         )
     return {"Total Closed Trades": closed, "Total Open Trades": open_count}
 
-
-def _scalar(value):
-    """Return a numpy scalar as a plain Python one."""
-    return value.item() if hasattr(value, "item") else value

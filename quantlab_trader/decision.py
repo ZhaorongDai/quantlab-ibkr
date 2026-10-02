@@ -25,6 +25,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.base.portfolio import Decision, PortfolioConstructor
+from quantlab_trader._support.jsonable import python_scalar
 from quantlab_trader.base.venue import DecisionInputs, NextOpenOrder
 from quantlab_trader.calendar import RebalanceCalendar
 
@@ -245,7 +246,7 @@ class DecisionCycle:
         for label, weight in zip(weights["symbol"].values, weights.values):
             if not _finite(weight):
                 continue
-            permno = _scalar(label)
+            permno = python_scalar(label)
             position = held.get(permno, 0)
             if position and weight == current_weights.get(permno, np.nan):
                 continue
@@ -265,11 +266,6 @@ class DecisionCycle:
             elif delta < 0:
                 sells.append(NextOpenOrder(permno, "SELL", -delta, inputs.timestamp))
         return tuple(sells + buys)
-
-
-def _scalar(label):
-    """Return a symbol label as a plain Python scalar (numpy scalars unwrapped)."""
-    return label.item() if isinstance(label, np.generic) else label
 
 
 def _finite(value) -> bool:

@@ -68,6 +68,7 @@ from quantlab.base.portfolio import PredictionPanel
 from quantlab.base.tracking import NullTracker
 from quantlab.utils import backtest_stats
 from quantlab.utils.module import load_backtester_from_config
+from quantlab_trader._support.jsonable import jsonable
 from quantlab_trader import runner
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.base.venue import Loop
@@ -1414,22 +1415,6 @@ def _write(parity_dir: Path, report: dict, rungs: dict, closed: RungResult | Non
     xr.Dataset(variables, coords={"rung": names, "timestamp": timestamps.values}).to_zarr(
         parity_dir / "parity.zarr", mode="w"
     )
-    (parity_dir / "parity.json").write_text(json.dumps(_jsonable(report), indent=2))
+    (parity_dir / "parity.json").write_text(json.dumps(jsonable(report), indent=2))
     return parity_dir
 
-
-def _jsonable(value):
-    """Return ``value`` as strict JSON values (NaN and infinities as ``None``)."""
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, (pd.Timestamp, np.datetime64)):
-        return pd.Timestamp(value).isoformat()
-    if isinstance(value, (bool, np.bool_)):
-        return bool(value)
-    if isinstance(value, (int, np.integer)):
-        return int(value)
-    if isinstance(value, (float, np.floating)):
-        return float(value) if math.isfinite(value) else None
-    return value
