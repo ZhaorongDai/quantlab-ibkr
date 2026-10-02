@@ -93,12 +93,14 @@ was not booked, so raw-price holdings jumped by multiples no holder had.
 
 quantlab chains `adjClose` from CRSP's total return `ret` (a missing `ret` counts as 0), so on a
 bar t with a raw close, with p the last bar before it with a raw close, the share change that
-conserves a holder's value given `adjClose`'s return is
+conserves a holder's value given `adjClose`'s return is (p and t both with a raw close and an
+`adjClose`)
 
     x = (adjClose[t] / adjClose[p] * close[p] - C - Q * divCash[t]) / (Q * close[t])
 
 where `Q` and `C` are the shares and cash per share held at p that actions booked on rows
-between p and t (rows without a raw close, inside a halt) made of it; `Q = 1, C = 0` on an
+between p and t (rows without a raw close or an `adjClose`, inside a halt; a distribution there
+is paid at the raw close when the row has one, else at the pre-split close / k) made of it; `Q = 1, C = 0` on an
 ordinary day. `divCash[t]` is paid on the pre-split shares, as the venue pays it, so a dividend
 is not counted twice, and a value distribution keeps its cash booking (its day is never checked).
 The rule, on a day the factors leave alone (no factor day, or `OTHER`):

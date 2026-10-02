@@ -280,3 +280,26 @@ def test_a_split_on_a_row_without_a_price_is_not_booked_again_by_the_prices(tmp_
             data["equity"].sel(rung="L5").values, expected, rtol=0, atol=1e-6
         )
     assert json.loads((parity_dir / "parity.json").read_text())["checks"]["T_equals_L5"]["passed"]
+
+
+def test_a_distribution_on_a_row_without_an_adjusted_close_is_netted_alike(tmp_path):
+    """20008 pays a value distribution (k 1.25) on bar 1, a row with a raw close
+    of 6 but no adjClose; both the venue and the reference ledger pay it at
+    that close and net it out of bar 2's implied factor, so T equals L5."""
+    from quantlab_trader.parity import parity
+
+    bars = BARS[:4]
+    close = {20008: [10.0, 6.0, 8.2, 8.1], 20009: [10.0] * 4}
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", bars, close, close,
+        {20008: [0.5, NAN, NAN, NAN], 20009: [0.1, NAN, NAN, NAN]},
+        variables={
+            "adjClose": {20008: [10.0, NAN, 11.422, 11.3], 20009: [10.0] * 4},
+            "splitFactor": {20008: [1.0, 1.25, 1.0, 1.0], 20009: [1.0] * 4},
+            "cumfacshr": {20008: [1.0] * 4, 20009: [1.0] * 4},
+            "divCash": {20008: [0.0] * 4, 20009: [0.0] * 4},
+        },
+    )
+    parity_dir = parity(quantlab_run, output_dir=tmp_path / "parity")
+
+    assert json.loads((parity_dir / "parity.json").read_text())["checks"]["T_equals_L5"]["passed"]

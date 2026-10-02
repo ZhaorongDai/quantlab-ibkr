@@ -905,7 +905,8 @@ def _holder_days(
         if i > 0:
             paid += units * dividend[i]
             spun = (kind[i] == "DISTRIBUTION") & ~priced
-            price = pre_close[i] / np.where(spun, k[i], 1.0)
+            # As the ledger pays it: at the close of t, or the pre-split close / k without one.
+            price = np.where(np.isfinite(close[i]), close[i], pre_close[i] / np.where(spun, k[i], 1.0))
             paid += np.where(spun, units * (k[i] - 1.0) * price, 0.0)
             with np.errstate(divide="ignore", invalid="ignore"):
                 x = (adj[i] / anchor_adj * anchor_close - paid) / (units * close[i])

@@ -21,8 +21,8 @@ position held at the prior close:
 - **price-implied share change** (#27): ``adjClose`` is chained from CRSP's
   total return, so on a day with a raw close the factor the prices imply,
   ``x = (adjClose[t] / adjClose[p] * close[p] - divCash[t]) / close[t]``
-  (p the last bar with a raw close, net of what was booked on rows between
-  them), is the holder's share change that conserves value. A factor day
+  (p the last bar with a raw close and an ``adjClose``, net of what was
+  booked on rows between them), is the holder's share change that conserves value. A factor day
   whose ``splitFactor`` agrees with x (``PRICE_FACTOR_RTOL``) is a holder
   split by ``splitFactor`` even when the share factor disagrees; a day
   without a usable factor whose x lies outside
@@ -100,6 +100,9 @@ _SHARE_EPS = 1e-9
 #: What a corporate-action day is (ADR 0009 and its amendments); ``None`` for
 #: a dividend alone.
 FactorKind = Literal["SPLIT", "DISTRIBUTION", "FINAL", "OTHER", "IMPLIED_SPLIT", "MISMATCH"]
+#: The kinds booked as a holder split (a price-0 venue fill, cash in lieu, a
+#: queued order rescaled).
+HOLDER_SPLIT_KINDS = ("SPLIT", "IMPLIED_SPLIT")
 
 
 def classify_factor_day(split_factor: float, share_factor: float) -> FactorKind | None:
@@ -270,9 +273,10 @@ def corporate_action_days(prices: xr.Dataset) -> tuple[CorporateActionDay, ...]:
     ``adjClose``'s return (``reconcile_with_prices``). The implied factor of
     a bar t with a raw close is
     ``(adjClose[t] / adjClose[p] * close[p] - C - Q * divCash[t]) / (Q * close[t])``,
-    with p the last bar with a raw close and ``Q``, ``C`` the shares and cash
-    per share held at p that the actions booked on the rows between p and t
-    (a halt's rows without a price) made of it.
+    with p the last bar with a raw close and an ``adjClose``, and ``Q``, ``C``
+    the shares and cash per share held at p that the actions booked on the
+    rows between p and t (a halt's rows without a raw close or an
+    ``adjClose``) made of it.
 
     Parameters
     ----------
@@ -405,7 +409,7 @@ def holder_split_factors(
     return {
         (day.date, day.permno): day.holder_factor
         for day in days
-        if day.kind in ("SPLIT", "IMPLIED_SPLIT")
+        if day.kind in HOLDER_SPLIT_KINDS
     }
 
 
@@ -485,7 +489,7 @@ class CorporateActionModule(SimulationModule):
         elif day.dividend:
             amount = self._credit(quantity * day.dividend)
             self._on_event("DIVIDEND", amount=amount, per_share=day.dividend, **report)
-        if day.kind in ("SPLIT", "IMPLIED_SPLIT"):
+        if day.kind in HOLDER_SPLIT_KINDS:
             self._split(position, quantity, day, report)
         elif day.kind == "DISTRIBUTION":
             amount = self._credit(
