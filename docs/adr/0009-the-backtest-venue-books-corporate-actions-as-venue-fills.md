@@ -18,7 +18,12 @@ ex-date, before the open + 1 ns orders of ADR 0003:
 - **dividend**: `exchange.adjust_account(divCash * signed_qty)` on the position held at the prior
   close (a short pays);
 - **delisting**: a venue-generated fill closing the position at its last valuation on bar b+1
-  (quantlab ADR 0014), from the same module.
+  (quantlab ADR 0014), from the same module. CIZ books a cash merger's payment in
+  `dlynonorddivamt` on the delisting row (measured on the S&P 500 store, 2026-10-02: all 181
+  delisting rows without a price carry `divCash` equal to the last close grown by the delisting
+  return), so `divCash` on a row without a raw close, on the delisting or settlement bar of a
+  settled delisting, is the proceeds the settlement pays and moves no cash (logged as
+  `DELISTING_PAYMENT`).
 
 Each venue fill is a `MarketOrder` carrying the position's trader and strategy ids and a
 `CORPORATE_ACTION_*` tag, added to the cache, marked submitted and accepted through the venue's

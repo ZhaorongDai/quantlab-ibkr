@@ -634,7 +634,9 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
     quantlab ADR 0014):
 
     - 09:30 of bar t, on the holding of the prior close: a dividend pays
-      ``divCash * q``; a holder split (``splitFactor`` k finite and positive,
+      ``divCash * q`` (not a delisting payment: ``divCash`` on a row without
+      a raw close, on the delisting or settlement bar of a settled
+      delisting, which the settlement pays); a holder split (``splitFactor`` k finite and positive,
       equal to the share factor ``cumfacshr[t-1] / cumfacshr[t]``) makes the
       holding ``q * k`` (whole shares: floored toward zero, the fraction paid
       at the pre-split close / k); a value distribution (k > 1, share factor
@@ -698,7 +700,13 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
                 q = position[j]
                 if q == 0:
                     continue
-                if dividend[i, j]:
+                # A delisting payment (divCash on a row without a raw close, on
+                # the delisting or the settlement bar of a settled delisting)
+                # is the proceeds the settlement pays, not a dividend.
+                payment = np.isnan(close[i, j]) and (
+                    market.delisted[i - 1, j] or (market.delisted[i, j] and i + 1 < n_bars)
+                )
+                if dividend[i, j] and not payment:
                     cash += money(q * dividend[i, j])
                 k = split_factor[i, j]
                 if kind[i, j] == "SPLIT":

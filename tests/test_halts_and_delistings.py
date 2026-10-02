@@ -178,6 +178,43 @@ def test_a_total_loss_delisting_settles_at_zero(tmp_path):
     np.testing.assert_allclose(equity[4:], [6_689.70, 6_932.45], rtol=0, atol=1e-9)
 
 
+
+@pytest.mark.parametrize("adj_close_on_delisting_row", [8.05, NAN])
+def test_a_delisting_payment_in_div_cash_is_not_paid_on_top_of_the_settlement(
+    tmp_path, adj_close_on_delisting_row
+):
+    # CRSP books a cash merger's payment in dlynonorddivamt on the delisting
+    # row, so the store's divCash there is the delisting proceeds. The
+    # settlement at the last valuation stands for them; they are not also a
+    # dividend. With an adjusted close on the row (8.05) the delisting bar is
+    # bar 4 and the settlement pays 16.10; without one, as the real CRSP
+    # stores have it, the delisting bar is bar 3 and the settlement pays 23.
+    adj_close = {**ADJ_CLOSE, 10002: [10.0, 10.5, 11.0, 11.5, adj_close_on_delisting_row, NAN]}
+    div_cash = {10001: [0.0] * 6, 10002: [0.0, 0.0, 0.0, 0.0, 16.10, NAN]}
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", BARS, OPEN, CLOSE, WEIGHTS,
+        variables={"adjClose": adj_close, "divCash": div_cash},
+    )
+    run_dir = run(
+        TraderConfig(
+            quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
+            output_dir=str(tmp_path / "trader"),
+        )
+    )
+
+    actions = [e["action"] for e in _events(run_dir, "corporate_action")]
+    assert "DIVIDEND" not in actions
+    assert actions.count("DELIST") == 1
+    [settlement] = [e for e in _events(run_dir, "corporate_action") if e["action"] == "DELIST"]
+    price = 16.10 if np.isfinite(adj_close_on_delisting_row) else 23.0
+    assert settlement["price"] == pytest.approx(price)
+    # Bar 5: cash after the settlement and after selling 500 of 10001 at 14.5 less 7.25.
+    equity = xr.open_zarr(run_dir / "equity.zarr").load()["value"].values
+    np.testing.assert_allclose(
+        equity[-1], -310.30 + 250 * price + 500 * 14.5 - 7.25, rtol=0, atol=1e-9
+    )
+
+
 def test_metrics_record_the_halt_as_a_rejected_order_and_the_settlement(replay):
     metrics = json.loads((replay / "metrics.json").read_text())
 

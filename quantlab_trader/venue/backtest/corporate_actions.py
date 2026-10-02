@@ -19,7 +19,13 @@ position held at the prior close:
   is settled by the delisting path. It is logged, as is any **other** factor
   day, which leaves the position alone;
 - **delisting** (quantlab ADR 0014): a venue fill closing the delisted
-  holding at its last valuation on the bar after its delisting bar.
+  holding at its last valuation on the bar after its delisting bar. CRSP
+  books a cash merger's payment as a distribution (``dlynonorddivamt``) on
+  the delisting row, a row without a raw price, so ``divCash`` there is the
+  delisting proceeds, which the settlement already pays: such a
+  **delisting payment** (``divCash`` on a row without a raw close, on the
+  delisting bar or the settlement bar of a settled delisting) moves no cash
+  and is logged as ``DELISTING_PAYMENT``.
 
 A dividend on a split's ex-date is paid on the shares held at the prior
 close, before the split. Each fill is a **venue fill**: a ``MarketOrder``
@@ -316,6 +322,11 @@ class CorporateActionModule(SimulationModule):
             for s in delistings
         ]
         self._due = deque(sorted(due, key=lambda item: item[0]))
+        self._delisting_rows = {
+            (date, s.permno)
+            for s in delistings
+            for date in (s.delisting_date, s.settlement_date)
+        }
 
     def process(self, ts_now: int) -> None:
         """Book every action due at or before ``ts_now`` (09:30 ET of its day)."""
@@ -334,7 +345,11 @@ class CorporateActionModule(SimulationModule):
         if not quantity:
             return
         report = dict(ts_ns=ts_now, permno=day.permno, quantity=quantity)
-        if day.dividend:
+        if day.dividend and self.is_delisting_payment(day):
+            self._on_event(
+                "DELISTING_PAYMENT", amount=0.0, per_share=day.dividend, **report
+            )
+        elif day.dividend:
             amount = self._credit(quantity * day.dividend)
             self._on_event("DIVIDEND", amount=amount, per_share=day.dividend, **report)
         if day.kind == "SPLIT":
@@ -354,6 +369,17 @@ class CorporateActionModule(SimulationModule):
                 share_factor=_json_float(day.share_factor),
                 **report,
             )
+
+    def is_delisting_payment(self, day: CorporateActionDay) -> bool:
+        """Whether ``day``'s ``divCash`` is a settled delisting's proceeds, not a dividend.
+
+        It is when the row has no raw close and is the delisting bar or the
+        settlement bar of one of the module's delistings.
+        """
+        return (
+            not np.isfinite(day.close)
+            and (day.date, day.permno) in self._delisting_rows
+        )
 
     def _split(self, position, quantity: int, day: CorporateActionDay, report: dict) -> None:
         """A price-0 venue fill of the share-count change plus cash in lieu of the fraction."""

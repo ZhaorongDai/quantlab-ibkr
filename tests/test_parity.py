@@ -253,6 +253,33 @@ def test_l3_equals_l2_without_corporate_actions(no_actions):
     assert _row(report, "L3")["rejected_orders"] == _row(report, "L2")["rejected_orders"] + 1
 
 
+
+@pytest.fixture(scope="module")
+def delisting_payments(tmp_path_factory):
+    """``no_actions`` with CRSP's delisting payment on 10006's delisting row.
+
+    CRSP books a cash merger's payment in ``dlynonorddivamt`` on the
+    delisting row, so the store's ``divCash`` there is the delisting proceeds
+    (the last close grown by the delisting return), which the settlement at
+    the last valuation already pays.
+    """
+    root = tmp_path_factory.mktemp("parity_delisting_payments")
+    variables = market_variables(OPEN, CLOSE, {}, DELISTINGS)
+    variables["divCash"][10006][6] = 10.4 * 1.10
+    run_dir = build_quantlab_run(
+        root / "quantlab", BARS, OPEN, CLOSE, WEIGHTS,
+        init_cash=100_000.0, fees=0.001, slippage=0.001, variables=variables,
+    )
+    return run_dir, _report(parity(run_dir, output_dir=root / "parity"))
+
+
+def test_a_delisting_payment_is_not_also_paid_as_a_dividend(delisting_payments):
+    _, (report, data) = delisting_payments
+
+    np.testing.assert_allclose(_equity(data, "L3"), _equity(data, "L2"), rtol=1e-12, atol=0)
+    assert report["checks"]["T_equals_L5"]["passed"]
+
+
 INTEGRAL_BARS = pd.bdate_range("2024-01-02", periods=6)
 INTEGRAL_OPEN = {
     10001: [10, 10, 11.5, 6.2, 6.45, 6.55],
