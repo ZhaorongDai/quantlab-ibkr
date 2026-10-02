@@ -69,7 +69,11 @@ the **holder split factor** `k`, booked only on days where `splitFactor ≈ shar
 drives the split venue fill, cash in lieu (pre-split close / k) and the open submitter's rescale of
 a queued order. A day with `splitFactor > 1` and `shareFactor = 1` is a **value distribution**
 (spin-off and the like): the share count is unchanged and the holder is credited
-`q · (splitFactor - 1) · close[t]` in cash at the next open, unless the same value is already in
-`divCash` that day (guard against double counting). The schedule skips non-finite factors; any
-other factor day leaves the position alone and is logged. No position is opened in a spin-off's
-new PERMNO. Event frequencies and the `divCash` overlap are still to be measured on real CRSP data.
+`q · (splitFactor - 1) · close[t]` in cash at the next open, in addition to that day's `divCash`
+(measured: CIZ never carries a spin-off's value in `divCash`). A split is booked only for a finite
+`k > 0`: a final distribution (`disfacpr = -1`, a merger or liquidation) gives `k = 0` and goes
+through the delisting path, never a split to zero shares. Any other factor day leaves the position
+alone and is logged. No position is opened in a spin-off's new PERMNO. Measured on 2000-2025 CRSP
+([#17](https://github.com/ZhaorongDai/quantlab-trader/issues/17)): 6,721 holder-split days, 657
+value-distribution days, 5,911 final events; the store's `splitFactor` equals the `cumfacpr` ratio
+on every comparable day.
