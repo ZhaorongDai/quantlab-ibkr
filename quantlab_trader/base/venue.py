@@ -334,7 +334,7 @@ class DecisionSource(ABC):
         ::
 
             inputs = venue.source.inputs(pd.Timestamp("2024-01-03"))
-            inputs.close  # raw closes of 2024-01-03 by PERMNO
+            result = cycle.run(inputs, positions, cash)
         """
 
     @abstractmethod

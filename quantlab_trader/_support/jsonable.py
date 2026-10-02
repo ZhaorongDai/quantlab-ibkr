@@ -1,9 +1,8 @@
 """Plain-Python views of numpy and pandas values, for JSON files and dict keys.
 
-Private support code shared by the run directory (``outputs.py``), the parity
-report (``parity.py``), the run metrics (``metrics.py``) and the decision core
-(``decision.py``). It imports numpy and pandas only, so the nautilus-free
-decision core can use it.
+Private support code for the modules that write JSON or key by symbol label.
+It imports numpy and pandas only, so the nautilus-free decision core can use
+it.
 """
 
 from __future__ import annotations

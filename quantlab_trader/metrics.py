@@ -82,8 +82,8 @@ class CycleRecord:
     ...     current_weights=pd.Series({10002: 0.4}),
     ...     equity=1_000_000.0,
     ... )
-    >>> record.weights.isna().sum()  # one holding kept
-    np.int64(1)
+    >>> int(record.weights.isna().sum())  # one holding kept
+    1
     """
 
     timestamp: pd.Timestamp

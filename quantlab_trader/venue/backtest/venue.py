@@ -173,10 +173,9 @@ class BacktestVenueConfig(VenueConfig):
         Examples
         --------
         ``runner.run`` builds the venue for its request; closed loop with
-        nothing set charges IBKR Pro Fixed::
+        nothing set charges IBKR Pro Fixed (``venue.fee_model``)::
 
             venue = BacktestVenueConfig().build(quantlab_run, request)
-            type(venue.fee_model).__name__  # 'IbkrFixedFeeModel'
         """
         execution = self.execution
         fee_model = _FEE_MODELS[execution.fee_model or _DEFAULT_FEE_MODEL[request.loop]](run)
@@ -256,7 +255,7 @@ class BacktestVenue(Venue):
         ::
 
             report = venue.run(strategy)
-            report.minimum_fee_orders  # frozenset of client order ids
+            minimum_fee_hits = len(report.minimum_fee_orders)
         """
         engine = BacktestEngine(
             BacktestEngineConfig(

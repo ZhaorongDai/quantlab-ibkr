@@ -53,7 +53,10 @@ class CycleResult:
     >>> cycle = DecisionCycle(TableTargets(pd.DataFrame({10001: [0.5]}, index=[t])))
     >>> close = pd.Series({10001: 30.0})
     >>> result = cycle.run(
-    ...     DecisionInputs(t, None, close.notna(), close, None, close.isna()),
+    ...     DecisionInputs(
+    ...         timestamp=t, predictions=None, tradable=close.notna(), close=close,
+    ...         decision_prices=None, delisted=close.isna(),
+    ...     ),
     ...     positions={10001: 10}, cash=700.0,
     ... )
     >>> result.equity, result.current_weights.to_dict(), [o.quantity for o in result.orders]
@@ -95,7 +98,10 @@ class TargetSource(ABC):
         >>> t = pd.Timestamp("2024-01-03")
         >>> source = TableTargets(pd.DataFrame({10001: [1.0]}, index=[t]))
         >>> close = pd.Series({10001: 30.0})
-        >>> inputs = DecisionInputs(t, None, close.notna(), close, None, close.isna())
+        >>> inputs = DecisionInputs(
+        ...     timestamp=t, predictions=None, tradable=close.notna(),
+        ...     close=close, decision_prices=None, delisted=close.isna(),
+        ... )
         >>> source.targets(inputs, pd.Series(dtype=float)).weights.values.tolist()
         [1.0]
         """
@@ -150,7 +156,10 @@ class TableTargets(TargetSource):
         >>> t = pd.Timestamp("2024-01-03")
         >>> source = TableTargets(pd.DataFrame({10001: [0.5]}, index=[t]))
         >>> close = pd.Series({10001: 30.0})
-        >>> inputs = DecisionInputs(t, None, close.notna(), close, None, close.isna())
+        >>> inputs = DecisionInputs(
+        ...     timestamp=t, predictions=None, tradable=close.notna(),
+        ...     close=close, decision_prices=None, delisted=close.isna(),
+        ... )
         >>> source.targets(inputs, pd.Series({10001: 0.2})).weights.values.tolist()
         [0.5]
         """
@@ -188,7 +197,10 @@ class ConstructorTargets(TargetSource):
     ... )
     >>> row = xr.Dataset({"ret": ("symbol", [0.3, 0.1])}, coords={"symbol": [10001, 10002]})
     >>> close = pd.Series({10001: 30.0, 10002: 40.0})
-    >>> inputs = DecisionInputs(bars[0], row, close.notna(), close, None, close.isna())
+    >>> inputs = DecisionInputs(
+    ...     timestamp=bars[0], predictions=row, tradable=close.notna(),
+    ...     close=close, decision_prices=None, delisted=close.isna(),
+    ... )
     >>> source.targets(inputs, pd.Series(dtype=float)).weights.values.tolist()
     [1.0, 0.0]
     """
@@ -224,7 +236,10 @@ class ConstructorTargets(TargetSource):
         ...     RebalanceCalendar(bars, 2),
         ... )
         >>> close = pd.Series({10001: 30.0})
-        >>> inputs = DecisionInputs(bars[1], None, close.notna(), close, None, close.isna())
+        >>> inputs = DecisionInputs(
+        ...     timestamp=bars[1], predictions=None, tradable=close.notna(),
+        ...     close=close, decision_prices=None, delisted=close.isna(),
+        ... )
         >>> source.targets(inputs, pd.Series({10001: 1.0})) is None  # not a rebalance bar
         True
         """
@@ -264,7 +279,10 @@ class DecisionCycle:
     >>> t = pd.Timestamp("2024-01-03")
     >>> cycle = DecisionCycle(TableTargets(pd.DataFrame({10001: [1.0]}, index=[t])))
     >>> close = pd.Series({10001: 30.0})
-    >>> inputs = DecisionInputs(t, None, close.notna(), close, None, close.isna())
+    >>> inputs = DecisionInputs(
+    ...     timestamp=t, predictions=None, tradable=close.notna(),
+    ...     close=close, decision_prices=None, delisted=close.isna(),
+    ... )
     >>> cycle.run(inputs, positions={}, cash=1000.0).orders
     (NextOpenOrder(permno=10001, side='BUY', quantity=33, decision_date=Timestamp('2024-01-03 00:00:00')),)
     """
@@ -307,7 +325,10 @@ class DecisionCycle:
         >>> t = pd.Timestamp("2024-01-03")
         >>> table = pd.DataFrame({10001: [0.0], 10002: [0.5]}, index=[t])
         >>> close = pd.Series({10001: 25.0, 10002: 40.0})
-        >>> inputs = DecisionInputs(t, None, close.notna(), close, None, close.isna())
+        >>> inputs = DecisionInputs(
+        ...     timestamp=t, predictions=None, tradable=close.notna(),
+        ...     close=close, decision_prices=None, delisted=close.isna(),
+        ... )
         >>> result = DecisionCycle(TableTargets(table)).run(inputs, {10001: 20}, cash=500.0)
         >>> [(o.permno, o.side, o.quantity) for o in result.orders]
         [(10001, 'SELL', 20), (10002, 'BUY', 12)]

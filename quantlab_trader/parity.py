@@ -68,8 +68,8 @@ from quantlab.base.portfolio import PredictionPanel
 from quantlab.base.tracking import NullTracker
 from quantlab.utils import backtest_stats
 from quantlab.utils.module import load_backtester_from_config
-from quantlab_trader._support.jsonable import jsonable
 from quantlab_trader import runner
+from quantlab_trader._support.jsonable import jsonable
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.base.venue import Loop
 from quantlab_trader.metrics import UNFILLED_STATUSES

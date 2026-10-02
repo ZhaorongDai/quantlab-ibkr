@@ -426,9 +426,7 @@ class RunRecorder:
         ``runner.run`` writes the directory once the venue has run::
 
             run_dir = recorder.write(venue.run(strategy))
-            sorted(path.name for path in run_dir.iterdir())
-            # config.json, decisions.zarr, equity.zarr, events.json, metrics.json,
-            # orders.zarr, report.html
+            metrics = json.loads((run_dir / "metrics.json").read_text())
         """
         output_dir = Path(self.config.output_dir or self.run.run_dir.parent)
         run_dir = output_dir / self.run_name

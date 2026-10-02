@@ -159,7 +159,7 @@ class BacktestDecisionSource(DecisionSource):
         --------
         ::
 
-            source.calendar()  # the price dataset's bars from request.start to request.end
+            clock = BacktestDecisionClock(source.calendar())
         """
         return self._calendar
 
@@ -193,7 +193,7 @@ class BacktestDecisionSource(DecisionSource):
         ::
 
             inputs = source.inputs(pd.Timestamp("2024-01-03"))
-            inputs.decision_prices["timestamp"].values[-1]  # 2024-01-03
+            result = cycle.run(inputs, positions, cash)
         """
         predictions = None
         if self._predictions is not None and t in self._predictions.indexes["timestamp"]:

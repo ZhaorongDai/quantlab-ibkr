@@ -94,11 +94,12 @@ class QuantlabRun:
 
     Examples
     --------
-    Loaded from a quantlab backtest run directory::
+    Loaded from a quantlab backtest run directory, then read for its
+    decision column and window::
 
         run = QuantlabRun.load("runs/WeightsVectorBt_20261001")
-        run.market["valuation_price_column"]  # "adjClose"
-        run.window  # (Timestamp('2020-01-02'), Timestamp('2024-12-31'))
+        valuation_column = run.market["valuation_price_column"]
+        start, end = run.window
     """
 
     run_dir: Path
@@ -205,13 +206,11 @@ class QuantlabRun:
 
         Examples
         --------
-        Empty for a ``run_weights()`` run; a model's run gives its training
-        window and sample ranges::
+        Empty for a ``run_weights()`` run; a model's run gives its
+        ``training_window``, ``in_sample_range`` and ``out_of_sample_ranges``::
 
-            run.split()  # {}
-            model_run.split()
-            # {'training_window': ['2012-01-03', '2019-12-31'], 'in_sample_range': None,
-            #  'out_of_sample_ranges': [['2020-01-02', '2024-12-31']]}
+            split = QuantlabRun.load("runs/XGBoostVectorBt_20261001").split()
+            training_window = split["training_window"]
         """
         path = self.run_dir / "metrics.json"
         if not path.is_file():
@@ -235,7 +234,7 @@ class QuantlabRun:
         ::
 
             benchmark = run.benchmark()
-            sorted(benchmark)  # ['axis_symbol', 'returns', 'symbol']
+            returns = None if benchmark is None else benchmark["returns"]
         """
         with xr.open_zarr(self.run_dir / "equity.zarr") as equity:
             if "benchmark_returns" not in equity:
@@ -255,9 +254,10 @@ class QuantlabRun:
 
         Examples
         --------
-        A run recorded without a tracker::
+        ``runner.run`` tracks a trader run here unless its config names a
+        tracker::
 
-            run.tracker()  # NullTracker(project=None)
+            tracker = config.tracker or run.tracker()
         """
         recorded = self.config.get("tracker")
         if not recorded:
@@ -273,8 +273,7 @@ class QuantlabRun:
         --------
         ::
 
-            QuantlabRun.load("runs/WeightsVectorBt_20261001").backtester_class
-            # 'WeightsVectorBt'
+            project = f"{run.backtester_class}_backtest"
         """
         return str(self.config.get("name", "quantlab")).rsplit(".", 1)[-1]
 
