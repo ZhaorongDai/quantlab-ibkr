@@ -243,3 +243,22 @@ def test_a_held_security_missing_from_the_prediction_row_is_decided_as_unpredict
     )
     assert [o.permno for o in kept.orders] == [10002]
     assert kept.decision.weights.sel(symbol=10003).item() == 0.5
+
+
+def test_a_hold_keeps_every_holding():
+    class _Hold(TableTargets):
+        def __init__(self):
+            pass
+
+        def targets(self, inputs, current_weights):
+            return Decision(
+                xr.DataArray([np.nan, np.nan], dims="symbol", coords={"symbol": [10001, 10002]}),
+                failure="infeasible",
+            )
+
+    result = DecisionCycle(_Hold()).run(
+        _inputs({10001: 10.0, 10002: 20.0}), positions={10001: 5, 10002: 3}, cash=100.0
+    )
+
+    assert result.decision.failure == "infeasible"
+    assert result.orders == ()

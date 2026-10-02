@@ -49,7 +49,16 @@ class RebalanceCalendar:
         self._bars = bars
 
     def rebalances(self, t: pd.Timestamp) -> bool:
-        """Return whether bar ``t`` is a rebalance bar."""
+        """Return whether bar ``t`` is a rebalance bar.
+
+        A bar before the anchor or off the price calendar never is.
+
+        Examples
+        --------
+        >>> calendar = RebalanceCalendar(pd.bdate_range("2024-01-02", periods=4), 2)
+        >>> calendar.rebalances(pd.Timestamp("2024-01-04")), calendar.rebalances(pd.Timestamp("2024-01-01"))
+        (True, False)
+        """
         position = self._bars.get_indexer([pd.Timestamp(t)])[0]
         if position < 0 or position == len(self._bars) - 1:
             return False

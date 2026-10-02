@@ -96,20 +96,18 @@ class BacktestDecisionSource(DecisionSource):
         decision_symbols = (
             list(permnos) if predictions is None else list(predictions["symbol"].values)
         )
-        history = (
-            dataset.panel(
-                start if history_start is None else history_start,
-                end,
-                symbols=decision_symbols,
-            )[[fill_column, valuation_column]]
-            .transpose("timestamp", "symbol")
-            .load()
+        history = dataset.panel(
+            start if history_start is None else min(history_start, start),
+            end,
+            symbols=decision_symbols,
         )
+        # The whole panel: a dataset's tradable_bars may read more than the fill column.
         self._tradable = (
             dataset.tradable_bars(history.sel(timestamp=slice(start, end)), fill_column)
+            .load()
             .to_pandas()
         )
-        self._valuation = history[valuation_column]
+        self._valuation = history[valuation_column].transpose("timestamp", "symbol").load()
         self._delisted = dataset.delisting_bars(prices, valuation_column).to_pandas()
         raw_close = prices["close"].transpose("timestamp", "symbol").to_pandas()
         last_value = self._last_valuation(

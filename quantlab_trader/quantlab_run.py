@@ -153,7 +153,7 @@ class QuantlabRun:
             If the run has no ``predictions.zarr`` (a ``run_weights()`` run
             has no model and so no panel).
         """
-        return PredictionPanel.read(self._prediction_panel_path())
+        return PredictionPanel.read(self._require_prediction_panel())
 
     def constructor(self) -> PortfolioConstructor:
         """Return the run's portfolio construction rule, bound to its label specs.
@@ -176,7 +176,7 @@ class QuantlabRun:
                 f"an adjusted price; a closed-loop replay decides on adjusted closes "
                 f"(ADR 0002)"
             )
-        self._prediction_panel_path()
+        self._require_prediction_panel()
         rule = load_constructor(self.run_dir)
         if rule.required_factors():
             raise ValueError(
@@ -186,7 +186,7 @@ class QuantlabRun:
             )
         return rule
 
-    def _prediction_panel_path(self) -> Path:
+    def _require_prediction_panel(self) -> Path:
         """Return the path of ``predictions.zarr``, refusing a run without one."""
         path = self.run_dir / PredictionPanel.FILE_NAME
         if not path.exists():
