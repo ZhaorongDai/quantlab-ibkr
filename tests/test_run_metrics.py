@@ -18,6 +18,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from quantlab.base.config import LedoitWolfConfig, MeanVarianceConfig, TopNConfig
 from quantlab.base.portfolio import LabelSpec
@@ -244,6 +245,8 @@ def test_metrics_go_to_the_configured_tracker(tmp_path):
     assert tracked.summary["whole/Total Fees Paid"] == pytest.approx(22.33)
     assert tracked.summary["execution/trader/peak_cash_debit"] == pytest.approx(310.30)
     assert tracked.files == [run_dir / "report.html"]
+    # The run config gains the records config.json resolved.
+    assert "quantlab_data_fingerprint" in tracked.config
     assert tracked.failed is False
 
 
@@ -316,3 +319,24 @@ def test_closed_loop_held_bars_are_the_failed_bars(tmp_path):
     assert block["failed_bar_count"] == 3
     assert metrics["execution"]["max_target_deviation"] is None
     assert metrics["whole"]["Total Orders"] == 0
+
+
+def test_a_narrowed_window_measures_the_benchmark_from_its_first_close(tmp_path):
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", BARS, OPEN, CLOSE, WEIGHTS, benchmark=BENCHMARK
+    )
+    with xr.open_zarr(quantlab_run / "equity.zarr") as equity:
+        value = equity["benchmark_value"].values
+
+    run_dir = run(TraderConfig(quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(),
+                               loop="open", output_dir=str(tmp_path / "trader"),
+                               start="2024-01-03"))
+
+    # Both books start at the close of the window's first bar.
+    expected = (value[-1] / value[1] - 1) * 100
+    assert _metrics(run_dir)["benchmark"]["whole"]["Total Return [%]"] == pytest.approx(
+        expected, rel=1e-12
+    )
+    assert _metrics(run_dir)["relative"]["whole"]["Benchmark Total Return [%]"] == pytest.approx(
+        expected, rel=1e-12
+    )

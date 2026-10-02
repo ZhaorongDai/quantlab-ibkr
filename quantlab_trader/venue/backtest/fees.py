@@ -48,6 +48,17 @@ class FractionFeeModel(FeeModel):
         super().__init__()
         self.rate = float(rate)
 
+    @staticmethod
+    def minimum_applies(quantity, price) -> bool:
+        """Return ``False``: a fraction of the notional has no minimum.
+
+        Examples
+        --------
+        >>> FractionFeeModel.minimum_applies(1, 1.0)
+        False
+        """
+        return False
+
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:
         """Return ``rate * fill_qty * fill_px`` in the instrument's quote currency."""
         if is_fee_free(order):

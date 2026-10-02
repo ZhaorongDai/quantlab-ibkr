@@ -175,6 +175,14 @@ class QuantlabRun:
         top level of a ``run()`` run, ``stitched`` of a ``run_cv()`` run);
         empty for a run without a model (``run_weights()``) or without a
         ``metrics.json``.
+
+        Examples
+        --------
+        >>> run.split()  # a run_weights() run  # doctest: +SKIP
+        {}
+        >>> model_run.split()  # doctest: +SKIP
+        {'training_window': ['2012-01-03', '2019-12-31'], 'in_sample_range': None,
+         'out_of_sample_ranges': [['2020-01-02', '2024-12-31']]}
         """
         path = self.run_dir / "metrics.json"
         if not path.is_file():
@@ -192,6 +200,12 @@ class QuantlabRun:
             ``returns``: the benchmark's per-bar returns on the run's bars
             (``equity.zarr``'s ``benchmark_returns``); ``symbol`` and
             ``axis_symbol``: its names from ``metrics.json``.
+
+        Examples
+        --------
+        >>> benchmark = run.benchmark()  # doctest: +SKIP
+        >>> sorted(benchmark), benchmark["axis_symbol"]  # doctest: +SKIP
+        (['axis_symbol', 'returns', 'symbol'], '90000')
         """
         with xr.open_zarr(self.run_dir / "equity.zarr") as equity:
             if "benchmark_returns" not in equity:
@@ -207,7 +221,13 @@ class QuantlabRun:
         }
 
     def tracker(self) -> Tracker:
-        """Return the run's tracker, rebuilt from ``config.json``; ``NullTracker`` without one."""
+        """Return the run's tracker, rebuilt from ``config.json``; ``NullTracker`` without one.
+
+        Examples
+        --------
+        >>> run.tracker()  # doctest: +SKIP
+        NullTracker(project=None)
+        """
         recorded = self.config.get("tracker")
         if not recorded:
             return NullTracker()
@@ -216,7 +236,13 @@ class QuantlabRun:
 
     @property
     def backtester_class(self) -> str:
-        """The class name of the run's backtester (``WeightsVectorBt``, ...)."""
+        """The class name of the run's backtester, from ``config.json``'s ``name``.
+
+        Examples
+        --------
+        >>> run.backtester_class  # doctest: +SKIP
+        'WeightsVectorBt'
+        """
         return str(self.config.get("name", "quantlab")).rsplit(".", 1)[-1]
 
     def rebalance_table(self) -> xr.Dataset:

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -36,7 +37,8 @@ def run(config: TraderConfig) -> Path:
     The run is tracked through ``config.tracker``, or the quantlab run's own
     tracker (``NullTracker`` when it had none), in the quantlab run's
     project (``{Backtester}_backtest`` unless the tracker sets its own): one
-    tracking run named as the run directory, whose summary holds the metric
+    tracking run named as the run directory, whose config gains the
+    resolved records of ``config.json`` and whose summary holds the metric
     blocks of ``TRACKED_BLOCKS`` and which carries ``report.html``. A run
     that raises is finished as failed.
 
@@ -80,6 +82,7 @@ def run(config: TraderConfig) -> Path:
     ) as tracking:
         venue.run(strategy)
         run_dir = recorder.write()
+        tracking.update_config(json.loads((run_dir / "config.json").read_text()))
         tracking.summarize(
             {
                 block: recorder.metrics[block]

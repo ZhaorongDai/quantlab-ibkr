@@ -46,7 +46,7 @@ from quantlab.utils.backtest_report import write_backtest_report
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.base.venue import MARKET_TZ, NextOpenOrder
 from quantlab_trader.decision import CycleResult
-from quantlab_trader.metrics import Cycle, bar_label, run_metrics
+from quantlab_trader.metrics import CycleRecord, bar_label, run_metrics, window_benchmark
 from quantlab_trader.quantlab_run import QuantlabRun
 
 #: The notes of every trader run's ``metrics.json`` and report.
@@ -89,7 +89,7 @@ class RunRecorder:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self.run_name = f"{name}_{config.loop}_{stamp}"
         self.metrics: dict | None = None
-        self._cycles: list[Cycle] = []
+        self._cycles: list[CycleRecord] = []
         self._fills: list[dict] = []
         self._decisions: dict[pd.Timestamp, pd.Series] = {}
         self._equity: dict[pd.Timestamp, float] = {}
@@ -103,7 +103,7 @@ class RunRecorder:
         self._equity[t] = result.equity
         decided = None if result.decision is None else result.decision.weights
         self._cycles.append(
-            Cycle(
+            CycleRecord(
                 timestamp=pd.Timestamp(t),
                 weights=None
                 if decided is None
@@ -173,7 +173,7 @@ class RunRecorder:
         price: float,
         quantity: int,
         fee: float,
-        minimum_fee: bool = False,
+        minimum_fee: bool,
     ) -> None:
         """Add one fill to its order; fills of other orders are ignored.
 
@@ -383,7 +383,7 @@ class RunRecorder:
         )
         report_benchmark = {}
         if benchmark is not None:
-            returns = benchmark["returns"].sel(timestamp=equity["timestamp"].values)
+            returns = window_benchmark(benchmark["returns"], equity["timestamp"].values)
             report_benchmark = dict(
                 benchmark_returns=returns,
                 benchmark_value=self.init_cash * (1.0 + returns.fillna(0.0)).cumprod("timestamp"),

@@ -6,7 +6,7 @@ has, computed by quantlab's own public statistics
 (``quantlab.utils.backtest_stats``) so the numbers are comparable:
 
 - ``whole``: the return statistics over the trader window, ``Start Value``
-  and ``End Value``, ``Total Orders`` (orders that filled), ``Total Fees
+  and ``End Value``, ``Total Orders`` (fills of next-open orders), ``Total Fees
   Paid``, ``Traded Notional``, the position-level trade counts, the three
   turnover rows and the win rates;
 - ``in_sample`` / ``out_of_sample``: the same over the quantlab run's ranges,
@@ -58,8 +58,8 @@ CASH_ACTIONS = {
 
 
 @dataclass(frozen=True)
-class Cycle:
-    """One decision as the metrics need it.
+class CycleRecord:
+    """One decision cycle as the metrics read it.
 
     Attributes
     ----------
@@ -92,12 +92,31 @@ def bar_label(value) -> str:
     return ts.strftime("%Y-%m-%d") if ts == ts.normalize() else ts.isoformat()
 
 
+def window_benchmark(returns: xr.DataArray, timestamps) -> xr.DataArray:
+    """Return the benchmark's per-bar returns over the trader's bars, held from the first close.
+
+    The trader's book starts in cash at the close of its first bar, so the
+    benchmark's first return in the window is 0, as quantlab's own is on the
+    run's first bar; the rest are the quantlab run's.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-02", periods=3)
+    >>> run_returns = xr.DataArray([0.0, 0.01, 0.02], dims="timestamp", coords={"timestamp": bars})
+    >>> window_benchmark(run_returns, bars[1:]).values.tolist()
+    [0.0, 0.02]
+    """
+    window = returns.sel(timestamp=timestamps).copy()
+    window[0] = 0.0
+    return window
+
+
 def run_metrics(
     *,
     equity: xr.Dataset,
     fills: xr.Dataset,
     orders: xr.Dataset,
-    cycles: Sequence[Cycle],
+    cycles: Sequence[CycleRecord],
     events: Sequence[Mapping],
     closes: pd.DataFrame,
     init_cash: float,
@@ -122,7 +141,7 @@ def run_metrics(
     orders : xarray.Dataset
         The run's ``orders.zarr`` plus ``decided_quantity``, the quantity the
         decision sized (before a split rescaled it).
-    cycles : sequence of Cycle
+    cycles : sequence of CycleRecord
         Every decision cycle of the run, one per bar.
     events : sequence of dict
         The run's ``events.json`` events.
@@ -145,6 +164,13 @@ def run_metrics(
         ``portfolio_construction``).
     notes : sequence of str
         The run's notes.
+
+    Returns
+    -------
+    dict
+        The metrics, with the blocks the module docstring lists; values are
+        Python and pandas scalars (timestamps, timedeltas, NaN), to be made
+        JSON-safe by the writer.
     """
     stats = _Stats(equity, fills, init_cash, bar_interval, year_freq, rebalance_periods)
     timestamps = equity["timestamp"].values
@@ -194,7 +220,7 @@ def run_metrics(
         )
 
     if benchmark is not None:
-        bench = benchmark["returns"].sel(timestamp=timestamps)
+        bench = window_benchmark(benchmark["returns"], timestamps)
         metrics["benchmark"] = {
             "symbol": benchmark.get("symbol"),
             "axis_symbol": benchmark.get("axis_symbol"),
@@ -254,9 +280,8 @@ class _Stats:
             inside = backtest_stats.in_ranges(fills["timestamp"].values, ranges)
             size = np.abs(fills["size"].values.astype(float))[inside]
             price = fills["price"].values.astype(float)[inside]
-            # One row per order that filled, as quantlab counts one per fill
-            # (trader's next-open orders fill whole or report a partial fill).
-            orders = len(set(fills["order"].values[inside].tolist()))
+            # quantlab counts its fills (one order record each).
+            orders = int(inside.sum())
             fees = float(fills["fee"].values[inside].sum())
             notional = float((size * price).sum())
         else:
@@ -387,7 +412,7 @@ def _settled(events: Sequence[Mapping]) -> set:
 
 
 def _max_target_deviation(
-    cycles: Sequence[Cycle],
+    cycles: Sequence[CycleRecord],
     orders: xr.Dataset,
     closes: pd.DataFrame,
     settled: set,
@@ -417,13 +442,13 @@ def _max_target_deviation(
                 continue
             held = float(cycle.current_weights.get(permno, 0.0))
             traded = filled.get((cycle.timestamp, permno), 0.0)
-            if traded:
+            if traded:  # an order was sized, so the close exists
                 held += traded * float(closes.at[cycle.timestamp, permno]) / cycle.equity
             gaps.append(abs(weight - held))
     return max(gaps) if gaps else None
 
 
-def _trader_facts(fills: xr.Dataset, events: Sequence[Mapping], cycles: Sequence[Cycle]) -> dict:
+def _trader_facts(fills: xr.Dataset, events: Sequence[Mapping], cycles: Sequence[CycleRecord]) -> dict:
     """The ``execution.trader`` block: facts quantlab's engine has no name for."""
     facts: dict = {
         "commissions": float(fills["fee"].values.sum()) if fills.sizes.get("fill", 0) else 0.0,
