@@ -39,6 +39,16 @@ class PortfolioStrategy(Strategy):
         Collects decisions, equity, orders and events for the run directory.
     config : nautilus_trader.config.StrategyConfig, optional
         nautilus's strategy config.
+
+    Examples
+    --------
+    ``runner.run`` builds the strategy and hands it to the venue, which adds it
+    to its engine (backtest) or node (live)::
+
+        strategy = PortfolioStrategy(
+            venue=venue, cycle=DecisionCycle(targets), recorder=recorder
+        )
+        report = venue.run(strategy)
     """
 
     def __init__(
@@ -55,12 +65,37 @@ class PortfolioStrategy(Strategy):
         self.recorder = recorder
 
     def on_start(self) -> None:
-        """Attach to the submitter and let the venue's clock schedule the decisions."""
+        """Attach to the submitter and let the venue's clock schedule the decisions.
+
+        Examples
+        --------
+        nautilus calls it when the engine or node starts the strategy::
+
+            engine.add_strategy(strategy)
+            engine.run()  # calls strategy.on_start()
+        """
         self.venue.submitter.attach(self)
         self.venue.clock.schedule(self)
 
     def on_decision_time(self, t: pd.Timestamp) -> None:
-        """Run one decision cycle at the close of ``t``: the one decision method."""
+        """Run one decision cycle at the close of ``t``: the one decision method.
+
+        Parameters
+        ----------
+        t : pandas.Timestamp
+            The decision date, a bar of the decision source's calendar.
+
+        Examples
+        --------
+        The venue's decision clock calls it after each close; the backtest's
+        sets a time alert per bar::
+
+            strategy.clock.set_time_alert(
+                "decision-2024-01-03",
+                alert_time,
+                lambda _event: strategy.on_decision_time(pd.Timestamp("2024-01-03")),
+            )
+        """
         inputs = self.venue.source.inputs(t)
         result = self.cycle.run(
             inputs, holdings(self.cache, self.venue.resolver), derived_cash(self.cache)
@@ -77,6 +112,16 @@ class PortfolioStrategy(Strategy):
             The order decided at the close.
         time_in_force : nautilus_trader.model.enums.TimeInForce
             ``DAY`` at the backtest's opening print; ``AT_THE_OPEN`` live.
+
+        Examples
+        --------
+        The venue's open submitter calls it when the order should reach the
+        market; the backtest's does so one nanosecond after the next open::
+
+            strategy.submit_next_open(
+                NextOpenOrder(10001, "BUY", 25, pd.Timestamp("2024-01-03")),
+                TimeInForce.DAY,
+            )
         """
         instrument_id = self.venue.resolver.instrument_id(order.permno, order.decision_date)
         market_order = self.order_factory.market(
@@ -89,7 +134,22 @@ class PortfolioStrategy(Strategy):
         self.submit_order(market_order)
 
     def on_next_open_unfilled(self, order: NextOpenOrder, reason: str) -> None:
-        """Record a next-open order that ended without a fill; the holding is kept."""
+        """Record a next-open order that ended without a fill; the holding is kept.
+
+        Parameters
+        ----------
+        order : NextOpenOrder
+            The order decided at the close.
+        reason : str
+            Why it was not filled, recorded in ``orders.zarr`` and ``events.json``.
+
+        Examples
+        --------
+        The venue's open submitter calls it, for example for an order whose
+        security has no opening print on its fill bar::
+
+            strategy.on_next_open_unfilled(order, "no opening print on 2024-01-04")
+        """
         self.recorder.order_unfilled(order, reason)
 
     def on_corporate_action(
@@ -104,9 +164,19 @@ class PortfolioStrategy(Strategy):
     ) -> None:
         """Record a corporate action the venue applied to a holding without a fill.
 
-        Cash it moved (``DIVIDEND``, ``CASH_IN_LIEU``, ``DISTRIBUTION``) or a
-        day it left the holding alone on (``FINAL``, ``OTHER``, ``MISMATCH``), or a
-        delisting payment the settlement pays instead (``DELISTING_PAYMENT``).
+        A venue event, like ``on_next_open_unfilled``: any venue may call it,
+        and the strategy only records what it is told. The backtest venue's
+        corporate-action module calls it for the actions it books from the
+        run's price dataset; a live venue reports the broker's corporate
+        actions on the account (dividends credited, cash in lieu of
+        fractional shares) through it. A corporate action that changes a
+        share count arrives as a venue fill instead (``on_order_filled``,
+        ADR 0009).
+
+        The kinds are cash moved (``DIVIDEND``, ``CASH_IN_LIEU``,
+        ``DISTRIBUTION``), a day the holding was left alone on (``FINAL``,
+        ``OTHER``, ``MISMATCH``), or a delisting payment the settlement pays
+        instead (``DELISTING_PAYMENT``).
 
         Parameters
         ----------
@@ -122,6 +192,15 @@ class PortfolioStrategy(Strategy):
             Cash moved into the account (negative: paid out).
         **detail
             Facts of the action (``per_share``, ``split_factor``, ...).
+
+        Examples
+        --------
+        A venue reporting a USD 0.24 dividend on 100 shares held::
+
+            strategy.on_corporate_action(
+                "DIVIDEND", ts_ns=ts_ns, permno=10001, quantity=100,
+                amount=24.0, per_share=0.24,
+            )
         """
         self.recorder.corporate_action_cash(
             action, ts_ns=ts_ns, permno=permno, quantity=quantity, amount=amount, **detail
@@ -133,6 +212,18 @@ class PortfolioStrategy(Strategy):
         A fill tagged ``CORPORATE_ACTION_<KIND>`` is a venue fill (ADR 0009):
         the venue booked it on the strategy's position for a corporate
         action, so it is recorded in the run's events, never as an order.
+
+        Parameters
+        ----------
+        event : nautilus_trader.model.events.OrderFilled
+            The fill.
+
+        Examples
+        --------
+        nautilus calls it for every fill of an order on the strategy's
+        positions, so a test or a venue never calls it directly::
+
+            engine.run()  # each fill reaches strategy.on_order_filled(event)
         """
         # Quantity.as_double() is inexact for many share counts (59353 is
         # 59352.99999999999), so the count is read from its decimal.
@@ -157,9 +248,35 @@ class PortfolioStrategy(Strategy):
         )
 
     def on_order_rejected(self, event) -> None:
-        """Record an order the venue rejected."""
+        """Record an order the venue rejected.
+
+        Parameters
+        ----------
+        event : nautilus_trader.model.events.OrderRejected
+            The rejection, whose ``reason`` is recorded.
+
+        Examples
+        --------
+        nautilus calls it when the venue rejects one of the strategy's
+        orders::
+
+            engine.run()  # a rejection reaches strategy.on_order_rejected(event)
+        """
         self.recorder.order_refused(event.client_order_id.value, "rejected", str(event.reason))
 
     def on_order_denied(self, event) -> None:
-        """Record an order nautilus's risk engine denied."""
+        """Record an order nautilus's risk engine denied.
+
+        Parameters
+        ----------
+        event : nautilus_trader.model.events.OrderDenied
+            The denial, whose ``reason`` is recorded.
+
+        Examples
+        --------
+        nautilus calls it when its risk engine denies one of the strategy's
+        orders before it reaches the venue::
+
+            engine.run()  # a denial reaches strategy.on_order_denied(event)
+        """
         self.recorder.order_refused(event.client_order_id.value, "denied", str(event.reason))

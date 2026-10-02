@@ -30,7 +30,25 @@ PRINT_SIZE = Quantity(10_000_000_000, 0)
 
 
 def session_ns(dates: pd.DatetimeIndex | pd.Timestamp, time: pd.Timedelta):
-    """Return UNIX nanoseconds of ``time`` ET on each of ``dates`` (naive dates)."""
+    """Return UNIX nanoseconds of ``time`` ET on each of ``dates`` (naive dates).
+
+    Parameters
+    ----------
+    dates : pandas.DatetimeIndex or pandas.Timestamp
+        The session dates.
+    time : pandas.Timedelta
+        The time of day in the exchange time zone.
+
+    Returns
+    -------
+    numpy.ndarray of int, or int for a single ``Timestamp``
+
+    Examples
+    --------
+    >>> ns = session_ns(pd.Timestamp("2024-01-02"), OPEN_TIME)
+    >>> ns, pd.Timestamp(ns, tz="UTC")
+    (1704205800000000000, Timestamp('2024-01-02 14:30:00+0000', tz='UTC'))
+    """
     if isinstance(dates, pd.Timestamp):
         return int(session_ns(pd.DatetimeIndex([dates]), time)[0])
     stamps = (pd.DatetimeIndex(dates).normalize() + time).tz_localize(SESSION_TZ)
@@ -42,6 +60,20 @@ def opening_prints(prices: xr.Dataset) -> pd.DataFrame:
 
     Booleans on ``(timestamp, symbol)``, the rule ``build_feed`` emits
     opening prints by.
+
+    Parameters
+    ----------
+    prices : xarray.Dataset
+        Raw ``open`` on ``(timestamp, symbol)``.
+
+    Examples
+    --------
+    >>> prices = xr.Dataset(
+    ...     {"open": (("timestamp", "symbol"), [[30.0, np.nan], [30.5, 41.0]])},
+    ...     coords={"timestamp": pd.bdate_range("2024-01-02", periods=2), "symbol": [10001, 10002]},
+    ... )
+    >>> opening_prints(prices).values.tolist()
+    [[True, False], [True, True]]
     """
     return prices["open"].transpose("timestamp", "symbol").to_pandas().apply(np.isfinite)
 
@@ -62,6 +94,23 @@ def build_feed(prices: xr.Dataset, resolver: BacktestResolver) -> list:
     -------
     list
         ``TradeTick`` and ``Bar`` objects, unsorted.
+
+    Examples
+    --------
+    Two bars of two securities, one without an opening print on the first:
+
+    >>> bars = pd.bdate_range("2024-01-02", periods=2)
+    >>> prices = xr.Dataset(
+    ...     {
+    ...         "open": (("timestamp", "symbol"), [[30.0, np.nan], [30.5, 41.0]]),
+    ...         "close": (("timestamp", "symbol"), [[30.2, 40.0], [30.4, 41.2]]),
+    ...     },
+    ...     coords={"timestamp": bars, "symbol": [10001, 10002]},
+    ... )
+    >>> feed = build_feed(prices, BacktestResolver([10001, 10002], bars[0]))
+    >>> from collections import Counter
+    >>> sorted(Counter(type(item).__name__ for item in feed).items())
+    [('Bar', 3), ('TradeTick', 7)]
     """
     dates = pd.DatetimeIndex(prices["timestamp"].values)
     open_ns, close_ns = session_ns(dates, OPEN_TIME), session_ns(dates, CLOSE_TIME)

@@ -79,6 +79,15 @@ class RunRecorder:
         tracking run can be opened under it before the run.
     metrics : dict or None
         The metrics ``write()`` wrote.
+
+    Examples
+    --------
+    ``runner.run`` makes one per run, the strategy fills it and the run ends
+    with ``write``::
+
+        recorder = RunRecorder(config, quantlab_run, init_cash=venue.init_cash)
+        strategy = PortfolioStrategy(venue=venue, cycle=cycle, recorder=recorder)
+        run_dir = recorder.write(venue.run(strategy))
     """
 
     def __init__(self, config: TraderConfig, run: QuantlabRun, init_cash: float):
@@ -99,7 +108,22 @@ class RunRecorder:
         self._events: list[dict] = []
 
     def record_cycle(self, t: pd.Timestamp, result: CycleResult) -> None:
-        """Record one decision cycle: equity, the decision and its orders."""
+        """Record one decision cycle: equity, the decision and its orders.
+
+        Parameters
+        ----------
+        t : pandas.Timestamp
+            The decision date.
+        result : CycleResult
+            What the cycle produced.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_decision_time`` records every cycle::
+
+            result = cycle.run(inputs, positions, cash)
+            recorder.record_cycle(t, result)
+        """
         self._equity[t] = result.equity
         decided = None if result.decision is None else result.decision.weights
         self._cycles.append(
@@ -154,6 +178,20 @@ class RunRecorder:
 
         An order the venue rescaled across a split (ADR 0009) is recorded at
         the quantity submitted, its decided quantity kept in ``reason``.
+
+        Parameters
+        ----------
+        order : NextOpenOrder
+            The order as submitted.
+        client_order_id : str
+            The venue's id of the market order carrying it.
+
+        Examples
+        --------
+        ``PortfolioStrategy.submit_next_open`` links each market order it
+        submits::
+
+            recorder.order_submitted(order, market_order.client_order_id.value)
         """
         row = self._order_rows[(order.permno, order.decision_date)]
         self._client_rows[client_order_id] = row
@@ -184,6 +222,15 @@ class RunRecorder:
             The fill's UNIX nanoseconds; its bar is the market-time-zone date.
         price, quantity, fee
             The fill.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_order_filled`` records each fill of a
+        next-open order::
+
+            recorder.order_filled(
+                "O-20240104-143000-001-000-1", ts_ns=ts_ns, price=30.12, quantity=25, fee=1.0
+            )
         """
         row = self._client_rows.get(client_order_id)
         if row is None:
@@ -205,7 +252,21 @@ class RunRecorder:
         record["status"] = "filled" if record["filled"] >= record["quantity"] else "partially_filled"
 
     def order_unfilled(self, order: NextOpenOrder, reason: str) -> None:
-        """Mark a next-open order that ended without a fill."""
+        """Mark a next-open order that ended without a fill.
+
+        Parameters
+        ----------
+        order : NextOpenOrder
+            The order decided at the close.
+        reason : str
+            Why it was not filled.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_next_open_unfilled`` records it::
+
+            recorder.order_unfilled(order, "no next open in the backtest window")
+        """
         row = self._order_rows[(order.permno, order.decision_date)]
         self._orders[row].update(status="unfilled", reason=reason)
         self._events.append(
@@ -248,6 +309,16 @@ class RunRecorder:
             The fill price.
         fee : float
             The commission charged, zero under every trader fee model.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_order_filled`` records a venue fill this way,
+        here a delisting settlement selling 100 shares::
+
+            recorder.corporate_action(
+                "DELIST", ts_ns=ts_ns, permno=10001, side="SELL",
+                quantity=100, price=12.5, fee=0.0,
+            )
         """
         self._events.append(
             {
@@ -289,6 +360,16 @@ class RunRecorder:
             Cash moved into the account; negative when paid out.
         **detail
             Facts of the action, recorded as given.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_corporate_action`` records what a venue
+        reports, here a USD 0.24 dividend on 100 shares::
+
+            recorder.corporate_action_cash(
+                "DIVIDEND", ts_ns=ts_ns, permno=10001, quantity=100,
+                amount=24.0, per_share=0.24,
+            )
         """
         self._events.append(
             {
@@ -303,7 +384,23 @@ class RunRecorder:
         )
 
     def order_refused(self, client_order_id: str, status: str, reason: str) -> None:
-        """Mark an order the venue rejected or the risk engine denied."""
+        """Mark an order the venue rejected or the risk engine denied.
+
+        Parameters
+        ----------
+        client_order_id : str
+            The venue's id of the order; an id of no next-open order is ignored.
+        status : {"rejected", "denied"}
+            The order's final status.
+        reason : str
+            The venue's or risk engine's reason, appended to any earlier one.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_order_rejected`` records a rejection::
+
+            recorder.order_refused(event.client_order_id.value, "rejected", str(event.reason))
+        """
         row = self._client_rows.get(client_order_id)
         if row is not None:
             earlier = self._orders[row]["reason"]
@@ -318,6 +415,20 @@ class RunRecorder:
         report : VenueReport
             What the venue reported about the run's execution: which fills
             it charged its minimum commission.
+
+        Returns
+        -------
+        pathlib.Path
+            The run directory.
+
+        Examples
+        --------
+        ``runner.run`` writes the directory once the venue has run::
+
+            run_dir = recorder.write(venue.run(strategy))
+            sorted(path.name for path in run_dir.iterdir())
+            # config.json, decisions.zarr, equity.zarr, events.json, metrics.json,
+            # orders.zarr, report.html
         """
         output_dir = Path(self.config.output_dir or self.run.run_dir.parent)
         run_dir = output_dir / self.run_name

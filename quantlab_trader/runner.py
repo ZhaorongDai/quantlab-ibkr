@@ -59,6 +59,16 @@ def run(config: TraderConfig) -> Path:
         If the quantlab run cannot be executed (see ``QuantlabRun.load`` and,
         closed loop, ``QuantlabRun.constructor``), the window is empty or
         outside the run's, or the venue refuses its execution settings.
+
+    Examples
+    --------
+    Replaying a quantlab run on the backtest venue, closed loop::
+
+        from quantlab_trader.base.config import TraderConfig
+        from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+
+        run_dir = run(TraderConfig("runs/WeightsVectorBt_20261001", BacktestVenueConfig()))
+        json.loads((run_dir / "metrics.json").read_text())["whole"]["Total Return [%]"]
     """
     quantlab_run = QuantlabRun.load(config.quantlab_run)
     start, end = _window(config, quantlab_run)

@@ -23,6 +23,27 @@ def holdings(cache, resolver: InstrumentResolver) -> dict[Hashable, int]:
         The trader's cache.
     resolver : InstrumentResolver
         Maps each position's instrument back to its PERMNO.
+
+    Returns
+    -------
+    dict
+        Signed share counts by PERMNO; flat positions are left out.
+
+    Examples
+    --------
+    A stand-in for nautilus's cache, holding one short position:
+
+    >>> from decimal import Decimal
+    >>> from types import SimpleNamespace
+    >>> import pandas as pd
+    >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+    >>> resolver = BacktestResolver([10107], pd.Timestamp("2024-01-02"))
+    >>> position = SimpleNamespace(
+    ...     instrument_id=resolver.instrument_id(10107, pd.Timestamp("2024-01-02")),
+    ...     signed_decimal_qty=lambda: Decimal("-25"),
+    ... )
+    >>> holdings(SimpleNamespace(positions_open=lambda: [position]), resolver)
+    {10107: -25}
     """
     held: dict[Hashable, int] = {}
     for position in cache.positions_open():
@@ -38,10 +59,26 @@ def holdings(cache, resolver: InstrumentResolver) -> dict[Hashable, int]:
 def derived_cash(cache) -> float:
     """Return the account's cash: margin balance minus the open positions' cost.
 
+    Parameters
+    ----------
+    cache : nautilus_trader.cache.Cache
+        The trader's cache, holding one account.
+
+    Returns
+    -------
+    float
+        The account's cash.
+
     Raises
     ------
     ValueError
         If the cache does not hold exactly one account.
+
+    Examples
+    --------
+    ``PortfolioStrategy.on_decision_time`` reads the account this way::
+
+        result = cycle.run(inputs, holdings(strategy.cache, resolver), derived_cash(strategy.cache))
     """
     accounts = cache.accounts()
     if len(accounts) != 1:

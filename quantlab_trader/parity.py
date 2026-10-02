@@ -146,6 +146,13 @@ class RungResult:
         loops needs them.
     run_dir : pathlib.Path or None
         A trader rung's run directory.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-02", periods=2)
+    >>> result = RungResult("L0", pd.Series([1e6, 1.01e6], index=bars), 1e6, pd.DataFrame())
+    >>> round(float(result.equity.iloc[-1]) / result.init_cash - 1, 6), result.rejected
+    (0.01, [])
     """
 
     name: str
@@ -189,10 +196,12 @@ def parity(quantlab_run, *, output_dir=None, execution: ExecutionConfig | None =
 
     Examples
     --------
-    >>> report_dir = parity("runs/WeightsVectorBt_20261001", output_dir="parity")  # doctest: +SKIP
-    >>> report = json.loads((report_dir / "parity.json").read_text())  # doctest: +SKIP
-    >>> {name: check["passed"] for name, check in report["checks"].items()}  # doctest: +SKIP
-    {'L0_equals_run': True, 'T_equals_L5': True, 'data_fingerprints_agree': True}
+    A run whose ladder holds at both ends reports every check passed
+    (``L0_equals_run``, ``T_equals_L5`` and ``data_fingerprints_agree``)::
+
+        report_dir = parity("runs/WeightsVectorBt_20261001", output_dir="parity")
+        report = json.loads((report_dir / "parity.json").read_text())
+        {name: check["passed"] for name, check in report["checks"].items()}
     """
     run = QuantlabRun.load(quantlab_run)
     execution = _resolved(execution or ExecutionConfig(), run)

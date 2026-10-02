@@ -46,6 +46,18 @@ class CycleResult:
         Cash plus every holding at t's raw close.
     current_weights : pandas.Series
         Each holding's close value over equity, per PERMNO.
+
+    Examples
+    --------
+    >>> t = pd.Timestamp("2024-01-03")
+    >>> cycle = DecisionCycle(TableTargets(pd.DataFrame({10001: [0.5]}, index=[t])))
+    >>> close = pd.Series({10001: 30.0})
+    >>> result = cycle.run(
+    ...     DecisionInputs(t, None, close.notna(), close, None, close.isna()),
+    ...     positions={10001: 10}, cash=700.0,
+    ... )
+    >>> result.equity, result.current_weights.to_dict(), [o.quantity for o in result.orders]
+    (1000.0, {10001: 0.3}, [6])
     """
 
     decision: Decision | None
@@ -55,13 +67,38 @@ class CycleResult:
 
 
 class TargetSource(ABC):
-    """Where a decision cycle gets its target weights."""
+    """Where a decision cycle gets its target weights.
+
+    Examples
+    --------
+    Open loop reads a rebalance table, closed loop runs quantlab's rule:
+
+    >>> issubclass(TableTargets, TargetSource), issubclass(ConstructorTargets, TargetSource)
+    (True, True)
+    """
 
     @abstractmethod
     def targets(
         self, inputs: DecisionInputs, current_weights: pd.Series
     ) -> Decision | None:
-        """Return the bar's decision, or ``None`` when the bar does not rebalance."""
+        """Return the bar's decision, or ``None`` when the bar does not rebalance.
+
+        Parameters
+        ----------
+        inputs : DecisionInputs
+            What is known at the close of t.
+        current_weights : pandas.Series
+            Each holding's weight at t's raw close, per PERMNO.
+
+        Examples
+        --------
+        >>> t = pd.Timestamp("2024-01-03")
+        >>> source = TableTargets(pd.DataFrame({10001: [1.0]}, index=[t]))
+        >>> close = pd.Series({10001: 30.0})
+        >>> inputs = DecisionInputs(t, None, close.notna(), close, None, close.isna())
+        >>> source.targets(inputs, pd.Series(dtype=float)).weights.values.tolist()
+        [1.0]
+        """
 
 
 class TableTargets(TargetSource):
@@ -87,7 +124,15 @@ class TableTargets(TargetSource):
         self._table = table
 
     def row(self, t: pd.Timestamp) -> Decision | None:
-        """Return the table's row at ``t`` as a decision, or ``None`` without one."""
+        """Return the table's row at ``t`` as a decision, or ``None`` without one.
+
+        Examples
+        --------
+        >>> t = pd.Timestamp("2024-01-03")
+        >>> table = pd.DataFrame({10001: [0.5], 10002: [np.nan]}, index=[t])
+        >>> TableTargets(table).row(t).weights.to_series().to_dict()
+        {10001: 0.5, 10002: nan}
+        """
         if t not in self._table.index:
             return None
         row = self._table.loc[t].astype(float)
@@ -98,7 +143,17 @@ class TableTargets(TargetSource):
     def targets(
         self, inputs: DecisionInputs, current_weights: pd.Series
     ) -> Decision | None:
-        """Return the table's row at the decision date; holdings play no part."""
+        """Return the table's row at the decision date; holdings play no part.
+
+        Examples
+        --------
+        >>> t = pd.Timestamp("2024-01-03")
+        >>> source = TableTargets(pd.DataFrame({10001: [0.5]}, index=[t]))
+        >>> close = pd.Series({10001: 30.0})
+        >>> inputs = DecisionInputs(t, None, close.notna(), close, None, close.isna())
+        >>> source.targets(inputs, pd.Series({10001: 0.2})).weights.values.tolist()
+        [0.5]
+        """
         return self.row(inputs.timestamp)
 
 
@@ -119,6 +174,23 @@ class ConstructorTargets(TargetSource):
         The bound rule (``load_constructor``).
     calendar : RebalanceCalendar
         Which bars rebalance.
+
+    Examples
+    --------
+    quantlab's top-1 rule, rebalancing every other bar:
+
+    >>> from quantlab.base.config import TopNConfig
+    >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
+    >>> bars = pd.bdate_range("2024-01-02", periods=3)
+    >>> source = ConstructorTargets(
+    ...     TopNConstructor(TopNConfig(direction="long_only", top_n=1)),
+    ...     RebalanceCalendar(bars, 2),
+    ... )
+    >>> row = xr.Dataset({"ret": ("symbol", [0.3, 0.1])}, coords={"symbol": [10001, 10002]})
+    >>> close = pd.Series({10001: 30.0, 10002: 40.0})
+    >>> inputs = DecisionInputs(bars[0], row, close.notna(), close, None, close.isna())
+    >>> source.targets(inputs, pd.Series(dtype=float)).weights.values.tolist()
+    [1.0, 0.0]
     """
 
     def __init__(self, constructor: PortfolioConstructor, calendar: RebalanceCalendar):
@@ -128,7 +200,34 @@ class ConstructorTargets(TargetSource):
     def targets(
         self, inputs: DecisionInputs, current_weights: pd.Series
     ) -> Decision | None:
-        """Return the rule's decision on a rebalance bar, ``None`` on any other."""
+        """Return the rule's decision on a rebalance bar, ``None`` on any other.
+
+        Parameters
+        ----------
+        inputs : DecisionInputs
+            What is known at the close of t, with the bar's prediction row.
+        current_weights : pandas.Series
+            Each holding's weight at t's raw close, per PERMNO.
+
+        Raises
+        ------
+        ValueError
+            If a rebalance bar's inputs carry no prediction row.
+
+        Examples
+        --------
+        >>> from quantlab.base.config import TopNConfig
+        >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
+        >>> bars = pd.bdate_range("2024-01-02", periods=3)
+        >>> source = ConstructorTargets(
+        ...     TopNConstructor(TopNConfig(direction="long_only", top_n=1)),
+        ...     RebalanceCalendar(bars, 2),
+        ... )
+        >>> close = pd.Series({10001: 30.0})
+        >>> inputs = DecisionInputs(bars[1], None, close.notna(), close, None, close.isna())
+        >>> source.targets(inputs, pd.Series({10001: 1.0})) is None  # not a rebalance bar
+        True
+        """
         t = inputs.timestamp
         if not self.calendar.rebalances(t):
             return None
@@ -200,6 +299,18 @@ class DecisionCycle:
         ValueError
             If a holding, or a nonzero target, has no raw close to value or
             size it at, or equity is not positive.
+
+        Examples
+        --------
+        Moving a 20-share holding to half of a 1,000 equity, sells first:
+
+        >>> t = pd.Timestamp("2024-01-03")
+        >>> table = pd.DataFrame({10001: [0.0], 10002: [0.5]}, index=[t])
+        >>> close = pd.Series({10001: 25.0, 10002: 40.0})
+        >>> inputs = DecisionInputs(t, None, close.notna(), close, None, close.isna())
+        >>> result = DecisionCycle(TableTargets(table)).run(inputs, {10001: 20}, cash=500.0)
+        >>> [(o.permno, o.side, o.quantity) for o in result.orders]
+        [(10001, 'SELL', 20), (10002, 'BUY', 12)]
         """
         held = {p: int(q) for p, q in positions.items() if int(q) != 0}
         close = inputs.close

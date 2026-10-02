@@ -27,6 +27,14 @@ class DelistingSettlement:
         Bar b + 1, whose open the holding is settled at.
     price : float
         The last valuation in raw prices, at the instruments' precision.
+
+    Examples
+    --------
+    >>> settlement = DelistingSettlement(
+    ...     10001, pd.Timestamp("2024-01-03"), pd.Timestamp("2024-01-04"), 12.5
+    ... )
+    >>> settlement.settlement_date > settlement.delisting_date
+    True
     """
 
     permno: Hashable
@@ -69,6 +77,13 @@ class BacktestDecisionSource(DecisionSource):
         closed loop, the prediction panel over the window (one variable per
         label on ``(timestamp, symbol)``) and the first bar of the
         decision-price history (``start`` when unset).
+
+    Examples
+    --------
+    ``BacktestVenue`` builds it from the quantlab run and the replay request::
+
+        source = BacktestDecisionSource(QuantlabRun.load(run_dir), request)
+        inputs = source.inputs(source.calendar()[0])
     """
 
     def __init__(self, run: QuantlabRun, request: ReplayRequest):
@@ -138,15 +153,48 @@ class BacktestDecisionSource(DecisionSource):
         return tuple(settlements)
 
     def calendar(self) -> pd.DatetimeIndex:
-        """Return the window's bars."""
+        """Return the window's bars.
+
+        Examples
+        --------
+        ::
+
+            source.calendar()  # the price dataset's bars from request.start to request.end
+        """
         return self._calendar
 
     def delisting_settlements(self) -> tuple[DelistingSettlement, ...]:
-        """Return the window's delisting settlements, in time order."""
+        """Return the window's delisting settlements, in time order.
+
+        Examples
+        --------
+        ``BacktestVenue.run`` hands them to its corporate-action module::
+
+            CorporateActionModule(days, source.delisting_settlements(), resolver)
+        """
         return self._settlements
 
     def inputs(self, t: pd.Timestamp) -> DecisionInputs:
-        """Return the inputs of the decision at the close of ``t``."""
+        """Return the inputs of the decision at the close of ``t``.
+
+        Parameters
+        ----------
+        t : pandas.Timestamp
+            A bar of ``calendar()``.
+
+        Returns
+        -------
+        DecisionInputs
+            Nothing in them is later than ``t``; ``decision_prices`` run from
+            the history start to ``t``.
+
+        Examples
+        --------
+        ::
+
+            inputs = source.inputs(pd.Timestamp("2024-01-03"))
+            inputs.decision_prices["timestamp"].values[-1]  # 2024-01-03
+        """
         predictions = None
         if self._predictions is not None and t in self._predictions.indexes["timestamp"]:
             predictions = self._predictions.sel(timestamp=t, drop=True)

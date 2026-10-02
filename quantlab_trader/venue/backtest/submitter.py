@@ -50,6 +50,14 @@ class BacktestOpenSubmitter(OpenSubmitter):
         of the security on that bar.
     split_factors : Mapping, optional
         The holder split factor ``k`` by ``(ex-date, permno)``.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-02", periods=2)
+    >>> opens = pd.DataFrame({10001: [True, True]}, index=bars)
+    >>> submitter = BacktestOpenSubmitter(bars, opens, {(bars[1], 10001): 2.0})
+    >>> isinstance(submitter, OpenSubmitter)
+    True
     """
 
     def __init__(
@@ -64,11 +72,57 @@ class BacktestOpenSubmitter(OpenSubmitter):
         self._strategy: PortfolioStrategy | None = None
 
     def attach(self, strategy: PortfolioStrategy) -> None:
-        """Bind the strategy that submits the orders."""
+        """Bind the strategy that submits the orders.
+
+        Parameters
+        ----------
+        strategy : PortfolioStrategy
+            The strategy whose clock releases the orders and whose
+            ``submit_next_open`` and ``on_next_open_unfilled`` it calls.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_start`` attaches itself::
+
+            venue.submitter.attach(strategy)
+        """
         self._strategy = strategy
 
     def submit(self, orders: Sequence[NextOpenOrder], decision_date: pd.Timestamp) -> None:
-        """Queue ``orders`` for the open after ``decision_date``."""
+        """Queue ``orders`` for the open after ``decision_date``.
+
+        One time alert at the next bar's open + 1 ns releases them, sells
+        first; orders decided on the window's last bar are reported unfilled
+        at once.
+
+        Parameters
+        ----------
+        orders : Sequence of NextOpenOrder
+            The orders decided at the close of ``decision_date``.
+        decision_date : pandas.Timestamp
+            The decision bar.
+
+        Examples
+        --------
+        A stand-in strategy that prints the alerts it is set and the orders
+        reported unfilled:
+
+        >>> from types import SimpleNamespace
+        >>> class PrintingClock:
+        ...     def set_time_alert(self, name, alert_time, callback):
+        ...         print(name, alert_time)
+        >>> strategy = SimpleNamespace(
+        ...     clock=PrintingClock(),
+        ...     on_next_open_unfilled=lambda order, reason: print(order.permno, reason),
+        ... )
+        >>> bars = pd.bdate_range("2024-01-02", periods=2)
+        >>> submitter = BacktestOpenSubmitter(bars, pd.DataFrame({10001: [True, True]}, index=bars))
+        >>> submitter.attach(strategy)
+        >>> submitter.submit([NextOpenOrder(10001, "BUY", 10, bars[0])], bars[0])
+        next-open-2024-01-03 2024-01-03 14:30:00.000000001+00:00
+        >>> submitter.submit([NextOpenOrder(10001, "BUY", 10, bars[1])], bars[1])
+        10001 no next open in the backtest window
+        """
         if not orders:
             return
         strategy = self._strategy

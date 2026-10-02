@@ -91,6 +91,14 @@ class QuantlabRun:
         The run's record of the data it read, for a trader run's config.
     trading_days_per_year, session_minutes_per_day : int
         The run's annualization: its config's, or US equity's (252, 390).
+
+    Examples
+    --------
+    Loaded from a quantlab backtest run directory::
+
+        run = QuantlabRun.load("runs/WeightsVectorBt_20261001")
+        run.market["valuation_price_column"]  # "adjClose"
+        run.window  # (Timestamp('2020-01-02'), Timestamp('2024-12-31'))
     """
 
     run_dir: Path
@@ -126,6 +134,17 @@ class QuantlabRun:
             not a ``MarketDataset``, or its store lacks any of
             ``REQUIRED_PRICE_VARIABLES``, as a membership-masked derived
             store does (ADR 0006).
+
+        Examples
+        --------
+        >>> QuantlabRun.load("no/such/run")
+        Traceback (most recent call last):
+        ...
+        ValueError: ... is not a quantlab run directory: no config.json
+
+        A run directory written by quantlab's backtester::
+
+            run = QuantlabRun.load("runs/WeightsVectorBt_20261001")
         """
         run_dir = Path(run_dir).resolve()
         if not (run_dir / "config.json").is_file():
@@ -186,11 +205,13 @@ class QuantlabRun:
 
         Examples
         --------
-        >>> run.split()  # a run_weights() run  # doctest: +SKIP
-        {}
-        >>> model_run.split()  # doctest: +SKIP
-        {'training_window': ['2012-01-03', '2019-12-31'], 'in_sample_range': None,
-         'out_of_sample_ranges': [['2020-01-02', '2024-12-31']]}
+        Empty for a ``run_weights()`` run; a model's run gives its training
+        window and sample ranges::
+
+            run.split()  # {}
+            model_run.split()
+            # {'training_window': ['2012-01-03', '2019-12-31'], 'in_sample_range': None,
+            #  'out_of_sample_ranges': [['2020-01-02', '2024-12-31']]}
         """
         path = self.run_dir / "metrics.json"
         if not path.is_file():
@@ -211,9 +232,10 @@ class QuantlabRun:
 
         Examples
         --------
-        >>> benchmark = run.benchmark()  # doctest: +SKIP
-        >>> sorted(benchmark), benchmark["axis_symbol"]  # doctest: +SKIP
-        (['axis_symbol', 'returns', 'symbol'], '90000')
+        ::
+
+            benchmark = run.benchmark()
+            sorted(benchmark)  # ['axis_symbol', 'returns', 'symbol']
         """
         with xr.open_zarr(self.run_dir / "equity.zarr") as equity:
             if "benchmark_returns" not in equity:
@@ -233,8 +255,9 @@ class QuantlabRun:
 
         Examples
         --------
-        >>> run.tracker()  # doctest: +SKIP
-        NullTracker(project=None)
+        A run recorded without a tracker::
+
+            run.tracker()  # NullTracker(project=None)
         """
         recorded = self.config.get("tracker")
         if not recorded:
@@ -248,13 +271,22 @@ class QuantlabRun:
 
         Examples
         --------
-        >>> run.backtester_class  # doctest: +SKIP
-        'WeightsVectorBt'
+        ::
+
+            QuantlabRun.load("runs/WeightsVectorBt_20261001").backtester_class
+            # 'WeightsVectorBt'
         """
         return str(self.config.get("name", "quantlab")).rsplit(".", 1)[-1]
 
     def rebalance_table(self) -> xr.Dataset:
-        """Return the run's ``weights.zarr``: ``weight`` on ``(timestamp, symbol)``, loaded."""
+        """Return the run's ``weights.zarr``: ``weight`` on ``(timestamp, symbol)``, loaded.
+
+        Examples
+        --------
+        Open loop executes it as a frame of decision dates by PERMNO::
+
+            table = run.rebalance_table()["weight"].transpose("timestamp", "symbol").to_pandas()
+        """
         with xr.open_zarr(self.run_dir / "weights.zarr") as table:
             return table.load()
 
@@ -266,6 +298,12 @@ class QuantlabRun:
         ValueError
             If the run has no ``predictions.zarr`` (a ``run_weights()`` run
             has no model and so no panel).
+
+        Examples
+        --------
+        Closed loop reads the panel's predictions, one variable per label::
+
+            predictions = run.prediction_panel().predictions
         """
         return PredictionPanel.read(self._require_prediction_panel())
 
@@ -282,6 +320,13 @@ class QuantlabRun:
         ------
         ValueError
             For any of the refusals above.
+
+        Examples
+        --------
+        Closed loop decides with the bound rule::
+
+            rule = run.constructor()
+            targets = ConstructorTargets(rule, calendar)
         """
         valuation = self.market["valuation_price_column"]
         if not valuation.startswith("adj"):

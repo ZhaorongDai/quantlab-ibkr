@@ -73,6 +73,17 @@ class CycleRecord:
         Each holding's weight at t's raw close before the decision.
     equity : float
         Equity at t's raw close.
+
+    Examples
+    --------
+    >>> record = CycleRecord(
+    ...     timestamp=pd.Timestamp("2024-01-03"),
+    ...     weights=pd.Series({10001: 0.5, 10002: float("nan")}),
+    ...     current_weights=pd.Series({10002: 0.4}),
+    ...     equity=1_000_000.0,
+    ... )
+    >>> record.weights.isna().sum()  # one holding kept
+    np.int64(1)
     """
 
     timestamp: pd.Timestamp
@@ -172,6 +183,19 @@ def run_metrics(
         The metrics, with the blocks the module docstring lists; values are
         Python and pandas scalars (timestamps, timedeltas, NaN), to be made
         JSON-safe by the writer.
+
+    Examples
+    --------
+    ``RunRecorder.write`` computes them from what it collected and the
+    quantlab run::
+
+        metrics = run_metrics(
+            equity=equity, fills=fills, orders=orders, cycles=cycles, events=events,
+            closes=closes, init_cash=1_000_000.0, bar_interval=pd.Timedelta("1D"),
+            year_freq=backtest_stats.year_freq("1D", 252, 390), rebalance_periods=5,
+            split=run.split(), benchmark=run.benchmark(), closed_loop=True, notes=NOTES,
+        )
+        metrics["whole"]["Total Return [%]"]
     """
     stats = _Stats(equity, fills, init_cash, bar_interval, year_freq, rebalance_periods)
     timestamps = equity["timestamp"].values

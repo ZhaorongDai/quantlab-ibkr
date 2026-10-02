@@ -238,6 +238,16 @@ class CorporateActionDay:
     implied_factor : float
         The share change the prices imply (``reconcile_with_prices``); NaN
         where they cannot say (no raw close of t or before it).
+
+    Examples
+    --------
+    A 2-for-1 split that also pays a USD 0.10 dividend:
+
+    >>> day = CorporateActionDay(
+    ...     10001, pd.Timestamp("2024-01-04"), "SPLIT", 2.0, 2.0, 0.10, 52.0, 26.1
+    ... )
+    >>> day.holder_factor, day.dividend
+    (2.0, 0.1)
     """
 
     permno: Hashable
@@ -252,7 +262,17 @@ class CorporateActionDay:
 
     @property
     def holder_factor(self) -> float:
-        """``k`` of a holder split: ``splitFactor``, or the implied factor of an implied split."""
+        """``k`` of a holder split: ``splitFactor``, or the implied factor of an implied split.
+
+        Examples
+        --------
+        >>> day = CorporateActionDay(
+        ...     10001, pd.Timestamp("2024-01-04"), "IMPLIED_SPLIT", 1.0, 1.0, 0.0, 52.0, 26.0,
+        ...     implied_factor=2.0,
+        ... )
+        >>> day.holder_factor
+        2.0
+        """
         return self.implied_factor if self.kind == "IMPLIED_SPLIT" else self.split_factor
 
     @property
@@ -262,6 +282,14 @@ class CorporateActionDay:
         The raw close of t; without one, the pre-split close / k, which is
         what the close of t is when the price falls by exactly the
         distribution.
+
+        Examples
+        --------
+        >>> day = CorporateActionDay(
+        ...     10001, pd.Timestamp("2024-01-04"), "DISTRIBUTION", 1.05, 1.0, 0.0, 42.0, np.nan
+        ... )
+        >>> day.distribution_price  # 42 / 1.05
+        40.0
         """
         if np.isfinite(self.close):
             return float(self.close)
@@ -471,7 +499,22 @@ class CorporateActionModule(SimulationModule):
         }
 
     def process(self, ts_now: int) -> None:
-        """Book every action due at or before ``ts_now`` (09:30 ET of its day)."""
+        """Book every action due at or before ``ts_now`` (09:30 ET of its day).
+
+        Parameters
+        ----------
+        ts_now : int
+            The engine's time, UNIX nanoseconds.
+
+        Examples
+        --------
+        nautilus calls it on every engine step; with nothing scheduled it
+        books nothing:
+
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> module = CorporateActionModule((), (), BacktestResolver((), pd.Timestamp("2024-01-02")))
+        >>> module.process(session_ns(pd.Timestamp("2024-01-02"), OPEN_TIME))
+        """
         while self._due and self._due[0][0] <= ts_now:
             _, as_of, action = self._due.popleft()
             instrument_id = self._resolver.instrument_id(action.permno, as_of)
@@ -518,6 +561,20 @@ class CorporateActionModule(SimulationModule):
 
         It is when the row has no raw close and is the delisting bar or the
         settlement bar of one of the module's delistings.
+
+        Examples
+        --------
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> from quantlab_trader.venue.backtest.source import DelistingSettlement
+        >>> delisted, settled = pd.Timestamp("2024-01-03"), pd.Timestamp("2024-01-04")
+        >>> module = CorporateActionModule(
+        ...     (),
+        ...     (DelistingSettlement(10001, delisted, settled, 12.5),),
+        ...     BacktestResolver([10001], pd.Timestamp("2024-01-02")),
+        ... )
+        >>> payment = CorporateActionDay(10001, settled, None, 1.0, 1.0, 12.5, 12.0, np.nan)
+        >>> module.is_delisting_payment(payment)
+        True
         """
         return (
             not np.isfinite(day.close)
@@ -591,10 +648,28 @@ class CorporateActionModule(SimulationModule):
         )
 
     def log_diagnostics(self, logger) -> None:
-        """Nothing to log."""
+        """Nothing to log.
+
+        Examples
+        --------
+        Part of nautilus's ``SimulationModule`` interface; it logs nothing:
+
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> module = CorporateActionModule((), (), BacktestResolver((), pd.Timestamp("2024-01-02")))
+        >>> module.log_diagnostics(logger=None)
+        """
 
     def reset(self) -> None:
-        """Nothing to reset: the schedule is built once per engine."""
+        """Nothing to reset: the schedule is built once per engine.
+
+        Examples
+        --------
+        Part of nautilus's ``SimulationModule`` interface; it changes nothing:
+
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> module = CorporateActionModule((), (), BacktestResolver((), pd.Timestamp("2024-01-02")))
+        >>> module.reset()
+        """
 
 
 def _json_float(value: float) -> float | None:

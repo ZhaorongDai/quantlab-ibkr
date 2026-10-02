@@ -73,13 +73,34 @@ class BacktestResolver(InstrumentResolver):
             )
 
     def instrument_id(self, permno: Hashable, as_of: pd.Timestamp) -> InstrumentId:
-        """Return ``<permno>.CRSP``; the PERMNO never changes, so ``as_of`` plays no part."""
+        """Return ``<permno>.CRSP``; the PERMNO never changes, so ``as_of`` plays no part.
+
+        Examples
+        --------
+        >>> resolver = BacktestResolver([10107], pd.Timestamp("2024-01-02"))
+        >>> resolver.instrument_id(10107, pd.Timestamp("2030-01-02"))
+        InstrumentId('10107.CRSP')
+        """
         return self._ids[permno]
 
     def permno(self, instrument_id: InstrumentId) -> Hashable:
-        """Return the PERMNO of ``instrument_id``, with quantlab's label type."""
+        """Return the PERMNO of ``instrument_id``, with quantlab's label type.
+
+        Examples
+        --------
+        >>> resolver = BacktestResolver([10107], pd.Timestamp("2024-01-02"))
+        >>> resolver.permno(InstrumentId.from_str("10107.CRSP"))
+        10107
+        """
         return self._permnos[instrument_id]
 
     def instruments(self) -> Sequence[Instrument]:
-        """Return every instrument, in the order the PERMNOs were given."""
+        """Return every instrument, in the order the PERMNOs were given.
+
+        Examples
+        --------
+        >>> resolver = BacktestResolver([14593, 10107], pd.Timestamp("2024-01-02"))
+        >>> [(str(i.id), i.price_precision) for i in resolver.instruments()]
+        [('14593.CRSP', 4), ('10107.CRSP', 4)]
+        """
         return tuple(self._instruments)

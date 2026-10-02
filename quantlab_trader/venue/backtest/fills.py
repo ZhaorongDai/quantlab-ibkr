@@ -73,7 +73,40 @@ class FractionSlippageFillModel(FillModel):
         self.slippage = slippage
 
     def get_orderbook_for_fill_simulation(self, instrument, order, best_bid, best_ask):
-        """Return a one-level book at the slipped bid and ask, or ``None`` without slippage."""
+        """Return a one-level book at the slipped bid and ask, or ``None`` without slippage.
+
+        Parameters
+        ----------
+        instrument : nautilus_trader.model.instruments.Instrument
+            The instrument filled; its price precision rounds the slipped prices.
+        order : nautilus_trader.model.orders.Order
+            The order being filled (unused: both sides are slipped).
+        best_bid, best_ask : nautilus_trader.model.objects.Price
+            The print the order fills at.
+
+        Returns
+        -------
+        nautilus_trader.model.book.OrderBook or None
+
+        Examples
+        --------
+        nautilus asks for the book on each fill; at 0.1% slippage a print at
+        USD 10 sells at 9.99 and buys at 10.01:
+
+        >>> import pandas as pd
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> instrument = BacktestResolver([10001], pd.Timestamp("2024-01-02")).instruments()[0]
+        >>> price = Price(10, 4)
+        >>> book = FractionSlippageFillModel(0.001).get_orderbook_for_fill_simulation(
+        ...     instrument, None, price, price
+        ... )
+        >>> book.best_bid_price(), book.best_ask_price()
+        (Price(9.9900), Price(10.0100))
+        >>> FractionSlippageFillModel(0.0).get_orderbook_for_fill_simulation(
+        ...     instrument, None, price, price
+        ... ) is None
+        True
+        """
         if self.slippage == 0.0:
             return None
         precision = instrument.price_precision

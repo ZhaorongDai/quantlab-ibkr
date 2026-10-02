@@ -47,6 +47,11 @@ class FractionFeeModel(FeeModel):
     ----------
     minimum_fee_orders : set of str
         Always empty: a fraction of the notional has no minimum.
+
+    Examples
+    --------
+    >>> FractionFeeModel(0.001).rate, FractionFeeModel(0.001).minimum_fee_orders
+    (0.001, set())
     """
 
     def __init__(self, rate: float):
@@ -55,7 +60,32 @@ class FractionFeeModel(FeeModel):
         self.minimum_fee_orders: set[str] = set()
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:
-        """Return ``rate * fill_qty * fill_px`` in the instrument's quote currency."""
+        """Return ``rate * fill_qty * fill_px`` in the instrument's quote currency.
+
+        Parameters
+        ----------
+        order : nautilus_trader.model.orders.Order
+            The order filled; its tags say whether the fill is free.
+        fill_qty : nautilus_trader.model.objects.Quantity
+            Shares filled.
+        fill_px : nautilus_trader.model.objects.Price
+            The fill price.
+        instrument : nautilus_trader.model.instruments.Instrument
+            The instrument traded.
+
+        Examples
+        --------
+        nautilus calls it on each fill; a stand-in order without tags:
+
+        >>> from types import SimpleNamespace
+        >>> import pandas as pd
+        >>> from nautilus_trader.model.objects import Price, Quantity
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> instrument = BacktestResolver([10001], pd.Timestamp("2024-01-02")).instruments()[0]
+        >>> order = SimpleNamespace(tags=None)
+        >>> FractionFeeModel(0.001).get_commission(order, Quantity(100, 0), Price(10.5, 4), instrument)
+        Money(1.05, USD)
+        """
         if is_fee_free(order):
             return Money(0, instrument.quote_currency)
         # The share count from its decimal: Quantity.as_double() is inexact for many.
@@ -98,7 +128,17 @@ class IbkrFixedFeeModel(FeeModel):
 
     @classmethod
     def charge(cls, side: OrderSide, quantity: Decimal | int, price: Decimal) -> Decimal:
-        """Return the fee in USD, rounded to the cent, for ``quantity`` shares at ``price``."""
+        """Return the fee in USD, rounded to the cent, for ``quantity`` shares at ``price``.
+
+        Examples
+        --------
+        3,000 shares at USD 20: 0.005 per share, plus the SEC fee on a sale:
+
+        >>> IbkrFixedFeeModel.charge(OrderSide.BUY, 3000, Decimal("20"))
+        Decimal('15.00')
+        >>> IbkrFixedFeeModel.charge(OrderSide.SELL, 3000, Decimal("20"))
+        Decimal('16.24')
+        """
         value = Decimal(quantity) * Decimal(price)
         per_share = max(cls.PER_SHARE * Decimal(quantity), cls.MINIMUM)
         commission = min(per_share, cls.MAXIMUM_RATE * value)
@@ -127,6 +167,34 @@ class IbkrFixedFeeModel(FeeModel):
         """Return the IBKR Pro Fixed fee of the fill in the instrument's quote currency.
 
         A fill charged the minimum adds its order to ``minimum_fee_orders``.
+
+        Parameters
+        ----------
+        order : nautilus_trader.model.orders.Order
+            The order filled; its tags say whether the fill is free.
+        fill_qty : nautilus_trader.model.objects.Quantity
+            Shares filled.
+        fill_px : nautilus_trader.model.objects.Price
+            The fill price.
+        instrument : nautilus_trader.model.instruments.Instrument
+            The instrument traded.
+
+        Examples
+        --------
+        nautilus calls it on each fill; a stand-in order of 100 shares, which
+        the USD 1.00 minimum prices:
+
+        >>> from types import SimpleNamespace
+        >>> import pandas as pd
+        >>> from nautilus_trader.model.objects import Price, Quantity
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> instrument = BacktestResolver([10001], pd.Timestamp("2024-01-02")).instruments()[0]
+        >>> order = SimpleNamespace(tags=None, side=OrderSide.BUY, client_order_id=SimpleNamespace(value="O-1"))
+        >>> model = IbkrFixedFeeModel()
+        >>> model.get_commission(order, Quantity(100, 0), Price(10.5, 4), instrument)
+        Money(1.00, USD)
+        >>> model.minimum_fee_orders
+        {'O-1'}
         """
         if is_fee_free(order):
             return Money(0, instrument.quote_currency)

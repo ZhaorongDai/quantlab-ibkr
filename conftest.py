@@ -1,4 +1,4 @@
-"""Test-session setup shared by every test module.
+"""Test-session setup shared by every test module and every doctest.
 
 On macOS, xgboost's wheel links Homebrew's libomp while torch bundles its own;
 a process that loads both crashes or deadlocks unless OpenMP runs one thread.

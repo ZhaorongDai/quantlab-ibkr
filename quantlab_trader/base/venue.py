@@ -225,19 +225,54 @@ class NextOpenOrder:
 
 
 class InstrumentResolver(ABC):
-    """A venue's two-way mapping between PERMNOs and its instruments (ADR 0004)."""
+    """A venue's two-way mapping between PERMNOs and its instruments (ADR 0004).
+
+    Examples
+    --------
+    The backtest venue's resolver maps each PERMNO onto ``<PERMNO>.CRSP``:
+
+    >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+    >>> resolver = BacktestResolver([10107], pd.Timestamp("2024-01-02"))
+    >>> isinstance(resolver, InstrumentResolver)
+    True
+    """
 
     @abstractmethod
     def instrument_id(self, permno: Hashable, as_of: pd.Timestamp) -> InstrumentId:
-        """Return the venue's instrument for ``permno`` on decision date ``as_of``."""
+        """Return the venue's instrument for ``permno`` on decision date ``as_of``.
+
+        Examples
+        --------
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> resolver = BacktestResolver([10107], pd.Timestamp("2024-01-02"))
+        >>> str(resolver.instrument_id(10107, pd.Timestamp("2024-01-03")))
+        '10107.CRSP'
+        """
 
     @abstractmethod
     def permno(self, instrument_id: InstrumentId) -> Hashable:
-        """Return the PERMNO of ``instrument_id``, as quantlab's symbol label."""
+        """Return the PERMNO of ``instrument_id``, as quantlab's symbol label.
+
+        Examples
+        --------
+        >>> from nautilus_trader.model.identifiers import InstrumentId
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> resolver = BacktestResolver([10107], pd.Timestamp("2024-01-02"))
+        >>> resolver.permno(InstrumentId.from_str("10107.CRSP"))
+        10107
+        """
 
     @abstractmethod
     def instruments(self) -> Sequence[Instrument]:
-        """Return every instrument the venue trades in this run."""
+        """Return every instrument the venue trades in this run.
+
+        Examples
+        --------
+        >>> from quantlab_trader.venue.backtest.resolver import BacktestResolver
+        >>> resolver = BacktestResolver([10107, 14593], pd.Timestamp("2024-01-02"))
+        >>> [str(instrument.id) for instrument in resolver.instruments()]
+        ['10107.CRSP', '14593.CRSP']
+        """
 
 
 class OpenSubmitter(ABC):
@@ -245,35 +280,96 @@ class OpenSubmitter(ABC):
 
     The only order code that differs between venues. An order that ends
     without a fill is reported through ``strategy.on_next_open_unfilled``.
+
+    Examples
+    --------
+    The strategy attaches when it starts and hands over each cycle's orders::
+
+        venue.submitter.attach(strategy)  # in strategy.on_start()
+        venue.submitter.submit(result.orders, t)  # after each decision
     """
 
     @abstractmethod
     def attach(self, strategy: PortfolioStrategy) -> None:
-        """Bind the strategy that submits the orders and hears about unfilled ones."""
+        """Bind the strategy that submits the orders and hears about unfilled ones.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_start`` attaches it::
+
+            venue.submitter.attach(strategy)
+        """
 
     @abstractmethod
     def submit(self, orders: Sequence[NextOpenOrder], decision_date: pd.Timestamp) -> None:
-        """Take the orders decided at the close of ``decision_date`` for the next open."""
+        """Take the orders decided at the close of ``decision_date`` for the next open.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_decision_time`` submits each cycle's orders,
+        sells first::
+
+            venue.submitter.submit(result.orders, t)
+        """
 
 
 class DecisionSource(ABC):
-    """Supplies one bar's decision inputs, reading nothing later than that bar."""
+    """Supplies one bar's decision inputs, reading nothing later than that bar.
+
+    Examples
+    --------
+    The strategy reads one bar's inputs at each decision and runs the cycle
+    on them::
+
+        inputs = venue.source.inputs(t)
+        result = cycle.run(inputs, positions, cash)
+    """
 
     @abstractmethod
     def inputs(self, t: pd.Timestamp) -> DecisionInputs:
-        """Return the inputs of the decision at the close of ``t``."""
+        """Return the inputs of the decision at the close of ``t``.
+
+        Examples
+        --------
+        ::
+
+            inputs = venue.source.inputs(pd.Timestamp("2024-01-03"))
+            inputs.close  # raw closes of 2024-01-03 by PERMNO
+        """
 
     @abstractmethod
     def calendar(self) -> pd.DatetimeIndex:
-        """Return the bars a decision cycle runs on."""
+        """Return the bars a decision cycle runs on.
+
+        Examples
+        --------
+        The backtest venue builds its clock and submitter on it::
+
+            calendar = venue.source.calendar()
+            clock = BacktestDecisionClock(calendar)
+        """
 
 
 class DecisionClock(ABC):
-    """Fires the decision cycle after the close of each bar of the source's calendar."""
+    """Fires the decision cycle after the close of each bar of the source's calendar.
+
+    Examples
+    --------
+    ``PortfolioStrategy.on_start`` hands the strategy to the clock::
+
+        venue.clock.schedule(strategy)
+    """
 
     @abstractmethod
     def schedule(self, strategy: PortfolioStrategy) -> None:
-        """Arrange for ``strategy.on_decision_time(t)`` to be called after each close."""
+        """Arrange for ``strategy.on_decision_time(t)`` to be called after each close.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_start`` calls it once::
+
+            venue.clock.schedule(strategy)
+        """
 
 
 class Venue(ABC):
@@ -282,6 +378,14 @@ class Venue(ABC):
     Fees, fills, the feed and corporate actions are not on this interface
     (ADR 0008): what the run's outputs need from them comes back from
     ``run`` as a ``VenueReport``.
+
+    Besides nautilus's order events, a venue tells the strategy two things
+    through its venue events, which any venue may emit:
+    ``strategy.on_next_open_unfilled(order, reason)`` for a next-open order
+    that ended without a fill, and ``strategy.on_corporate_action(...)`` for
+    a corporate action applied to a holding without a fill (the backtest
+    venue books them from the run's price dataset; a live venue reports the
+    broker's).
 
     Attributes
     ----------
@@ -294,6 +398,14 @@ class Venue(ABC):
         the run's Start Value: the simulated deposit in a backtest, the
         account's cash when the node starts live. Not a part: the run
         directory needs it, the strategy never reads it.
+
+    Examples
+    --------
+    ``runner.run`` builds the venue from the config and runs the strategy on
+    it::
+
+        venue = config.venue.build(quantlab_run, request)
+        report = venue.run(PortfolioStrategy(venue=venue, cycle=cycle, recorder=recorder))
     """
 
     init_cash: float
@@ -310,4 +422,11 @@ class Venue(ABC):
         -------
         VenueReport
             What the venue alone knows about the run's execution.
+
+        Examples
+        --------
+        ::
+
+            report = venue.run(strategy)
+            run_dir = recorder.write(report)
         """

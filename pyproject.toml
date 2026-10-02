@@ -31,7 +31,10 @@ namespaces = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-testpaths = ["tests"]
+# The docstrings' Examples run as doctests beside the tests.
+testpaths = ["tests", "quantlab_trader"]
+addopts = ["--doctest-modules"]
+doctest_optionflags = ["ELLIPSIS"]
 # A test that runs past this many seconds dumps every thread's stack and ends
 # the run, so a deadlock in native code fails instead of hanging.
 faulthandler_timeout = 300

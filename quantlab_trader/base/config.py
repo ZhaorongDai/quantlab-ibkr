@@ -36,6 +36,12 @@ class VenueConfig(ABC):
 
     ``get_config()`` returns the fields plus the subclass's import path under
     ``"name"``; ``VenueConfig.from_config`` picks the subclass from it.
+
+    Examples
+    --------
+    >>> from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+    >>> isinstance(BacktestVenueConfig(), VenueConfig)
+    True
     """
 
     @abstractmethod
@@ -49,10 +55,23 @@ class VenueConfig(ABC):
         request : ReplayRequest
             The window, the instruments, the loop and, closed loop, the
             prediction panel and the start of the decision-price history.
+
+        Examples
+        --------
+        ``runner.run`` builds the venue it runs the strategy on::
+
+            venue = config.venue.build(quantlab_run, request)
         """
 
     def get_config(self) -> dict[str, Any]:
-        """Return the fields as JSON values plus ``"name"``, the class's import path."""
+        """Return the fields as JSON values plus ``"name"``, the class's import path.
+
+        Examples
+        --------
+        >>> from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+        >>> BacktestVenueConfig().get_config()["name"]
+        'quantlab_trader.venue.backtest.venue.BacktestVenueConfig'
+        """
         return {**dataclasses.asdict(self), "name": _import_path(self)}
 
     @classmethod
@@ -61,6 +80,13 @@ class VenueConfig(ABC):
 
         Called on ``VenueConfig`` itself, the subclass named by ``"name"``
         rebuilds it; called on a subclass, that subclass does.
+
+        Examples
+        --------
+        >>> from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+        >>> config = VenueConfig.from_config(BacktestVenueConfig().get_config())
+        >>> type(config).__name__
+        'BacktestVenueConfig'
         """
         target = _class_named(config["name"], cls) if "name" in config else cls
         fields = {k: v for k, v in config.items() if k != "name"}
@@ -136,7 +162,16 @@ class TraderConfig:
             )
 
     def get_config(self) -> dict[str, Any]:
-        """Return the config as JSON values; the venue and tracker carry their ``"name"``."""
+        """Return the config as JSON values; the venue and tracker carry their ``"name"``.
+
+        Examples
+        --------
+        >>> from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+        >>> config = TraderConfig("/runs/WeightsVectorBt_1", BacktestVenueConfig(), loop="open")
+        >>> fields = config.get_config()
+        >>> fields["loop"], fields["venue"]["name"].rsplit(".", 1)[-1], fields["tracker"]
+        ('open', 'BacktestVenueConfig', None)
+        """
         fields = {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
         fields["loop"] = self.loop.value
         fields["venue"] = self.venue.get_config()
@@ -151,6 +186,16 @@ class TraderConfig:
         ----------
         config : Mapping
             ``get_config()``'s dict, for example a trader run's ``config.json``.
+
+        Examples
+        --------
+        >>> from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+        >>> recorded = {
+        ...     **TraderConfig("/runs/WeightsVectorBt_1", BacktestVenueConfig()).get_config(),
+        ...     "quantlab_records": {},  # a record config.json adds; ignored
+        ... }
+        >>> TraderConfig.from_config(recorded).loop
+        <Loop.CLOSED: 'closed'>
         """
         names = {f.name for f in dataclasses.fields(cls)}
         fields = {k: v for k, v in config.items() if k in names}

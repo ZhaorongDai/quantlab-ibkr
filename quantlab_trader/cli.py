@@ -58,6 +58,28 @@ def main(argv: Sequence[str] | None = None) -> int:
     ----------
     argv : Sequence of str, optional
         Arguments without the program name; ``sys.argv[1:]`` by default.
+
+    Returns
+    -------
+    int
+        0 on success, 1 when the run is refused (the reason is printed to
+        stderr), 2 when ``parity`` writes a report whose end checks fail.
+
+    Examples
+    --------
+    A directory that is not a quantlab run is refused with status 1:
+
+    >>> import contextlib, io
+    >>> with contextlib.redirect_stderr(io.StringIO()) as stderr:
+    ...     status = main(["backtest", "--quantlab-run", "no/such/run"])
+    >>> status, stderr.getvalue().strip().endswith("is not a quantlab run directory: no config.json")
+    (1, True)
+
+    From the shell, ``quantlab-trader`` runs ``main`` and prints the trader
+    run directory::
+
+        quantlab-trader backtest --quantlab-run runs/WeightsVectorBt_20261001 --loop open
+        quantlab-trader parity --quantlab-run runs/WeightsVectorBt_20261001
     """
     parser = _parser()
     args = parser.parse_args(argv)

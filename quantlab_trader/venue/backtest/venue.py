@@ -89,6 +89,15 @@ class ExecutionConfig:
     ValueError
         For an unknown fee model, a slippage outside ``[0, 1)`` or a
         starting cash that is not positive.
+
+    Examples
+    --------
+    >>> ExecutionConfig(fee_model="ibkr_fixed", slippage=0.0005).fee_model
+    'ibkr_fixed'
+    >>> ExecutionConfig(fee_model="tiered")
+    Traceback (most recent call last):
+    ...
+    ValueError: ExecutionConfig.fee_model must be one of ['fraction', 'ibkr_fixed'] or None, got 'tiered'
     """
 
     fee_model: Literal["fraction", "ibkr_fixed"] | None = None
@@ -160,6 +169,14 @@ class BacktestVenueConfig(VenueConfig):
         ------
         ValueError
             For a run whose own slippage lies outside ``[0, 1)``.
+
+        Examples
+        --------
+        ``runner.run`` builds the venue for its request; closed loop with
+        nothing set charges IBKR Pro Fixed::
+
+            venue = BacktestVenueConfig().build(quantlab_run, request)
+            type(venue.fee_model).__name__  # 'IbkrFixedFeeModel'
         """
         execution = self.execution
         fee_model = _FEE_MODELS[execution.fee_model or _DEFAULT_FEE_MODEL[request.loop]](run)
@@ -194,6 +211,13 @@ class BacktestVenue(Venue):
     ----------
     fee_model, fill_model, init_cash
         As given.
+
+    Examples
+    --------
+    Built by ``BacktestVenueConfig.build``, then run around the strategy::
+
+        venue = BacktestVenueConfig().build(quantlab_run, request)
+        report = venue.run(strategy)
     """
 
     def __init__(
@@ -226,6 +250,13 @@ class BacktestVenue(Venue):
         -------
         VenueReport
             The fills the fee model charged its minimum.
+
+        Examples
+        --------
+        ::
+
+            report = venue.run(strategy)
+            report.minimum_fee_orders  # frozenset of client order ids
         """
         engine = BacktestEngine(
             BacktestEngineConfig(
