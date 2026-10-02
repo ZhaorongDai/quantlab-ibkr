@@ -133,3 +133,8 @@ def test_a_nonzero_target_without_a_close_is_refused():
         _cycle({10002: 0.5}).run(
             _inputs({10001: 10.0, 10002: np.nan}), positions={}, cash=10.0
         )
+
+
+def test_an_account_without_positive_equity_is_refused():
+    with pytest.raises(ValueError, match="equity"):
+        _cycle({10001: 0.5}).run(_inputs({10001: 10.0}), positions={10001: -1}, cash=10.0)

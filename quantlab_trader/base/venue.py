@@ -166,8 +166,12 @@ class Venue(ABC):
     submitter : OpenSubmitter
     source : DecisionSource
     clock : DecisionClock
+    init_cash : float
+        The account's starting cash, the base of the first bar's return (the
+        simulated deposit in a backtest; the account's cash at start live).
     """
 
+    init_cash: float
     resolver: InstrumentResolver
     submitter: OpenSubmitter
     source: DecisionSource

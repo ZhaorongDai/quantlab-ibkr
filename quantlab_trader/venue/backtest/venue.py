@@ -7,6 +7,8 @@ and closing prints; the fee model; the open submitter and the decision clock.
 
 from __future__ import annotations
 
+import dataclasses
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
@@ -31,6 +33,10 @@ from quantlab_trader.venue.backtest.submitter import BacktestOpenSubmitter
 if TYPE_CHECKING:
     from quantlab_trader.strategy import PortfolioStrategy
 
+#: How long the engine runs past the last closing print, so the last
+#: decision (at close + 1 ns) fires.
+_AFTER_LAST_CLOSE = pd.Timedelta(hours=1)
+
 
 @dataclass(frozen=True)
 class ExecutionConfig:
@@ -51,6 +57,27 @@ class ExecutionConfig:
     slippage: float | None = None
     init_cash: float | None = None
 
+    def get_config(self) -> dict[str, Any]:
+        """Return the fields as JSON values.
+
+        Examples
+        --------
+        >>> ExecutionConfig(init_cash=1e6).get_config()
+        {'fee_model': None, 'slippage': None, 'init_cash': 1000000.0}
+        """
+        return dataclasses.asdict(self)
+
+    @classmethod
+    def from_config(cls, config: Mapping[str, Any]) -> Self:
+        """Rebuild the config ``get_config()`` returned.
+
+        Examples
+        --------
+        >>> ExecutionConfig.from_config({"init_cash": 1e6}) == ExecutionConfig(init_cash=1e6)
+        True
+        """
+        return cls(**config)
+
 
 @dataclass(frozen=True)
 class BacktestVenueConfig(VenueConfig):
@@ -70,7 +97,7 @@ class BacktestVenueConfig(VenueConfig):
         """Rebuild the nested ``ExecutionConfig``."""
         execution = fields.get("execution")
         if isinstance(execution, dict):
-            fields = {**fields, "execution": ExecutionConfig(**execution)}
+            fields = {**fields, "execution": ExecutionConfig.from_config(execution)}
         return cls(**fields)
 
     def build(
@@ -162,7 +189,10 @@ class BacktestVenue(Venue):
             calendar = self.source.calendar()
             engine.run(
                 start=pd.Timestamp(int(session_ns(calendar[0], pd.Timedelta(0))), tz="UTC"),
-                end=pd.Timestamp(int(session_ns(calendar[-1], CLOSE_TIME)) + 3_600_000_000_000, tz="UTC"),
+                end=pd.Timestamp(
+                    int(session_ns(calendar[-1], CLOSE_TIME) + _AFTER_LAST_CLOSE.value),
+                    tz="UTC",
+                ),
             )
         finally:
             engine.dispose()

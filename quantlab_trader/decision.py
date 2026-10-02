@@ -166,7 +166,7 @@ class DecisionCycle:
         ------
         ValueError
             If a holding, or a nonzero target, has no raw close to value or
-            size it at.
+            size it at, or equity is not positive.
         """
         held = {p: int(q) for p, q in positions.items() if int(q) != 0}
         close = inputs.close
@@ -177,6 +177,11 @@ class DecisionCycle:
                 f"have no raw close to value them at"
             )
         equity = float(cash) + sum(q * float(close[p]) for p, q in held.items())
+        if not equity > 0.0:
+            raise ValueError(
+                f"DecisionCycle at {inputs.timestamp.date()}: equity {equity} is "
+                f"not positive; there is nothing to size targets against"
+            )
         current_weights = pd.Series(
             {p: q * float(close[p]) / equity for p, q in held.items()}, dtype=float
         )

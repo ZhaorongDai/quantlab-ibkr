@@ -199,3 +199,12 @@ def test_the_cli_runs_a_saved_trader_config(replay, tmp_path, capsys):
     run_dir = Path(capsys.readouterr().out.strip())
     orders = _orders(run_dir)
     assert orders["quantity"].tolist() == [500, 250, 500, 258, 254]
+
+
+def test_the_cli_reports_a_refused_run_without_a_traceback(tmp_path, capsys):
+    from quantlab_trader.cli import main
+
+    status = main(["backtest", "--quantlab-run", str(tmp_path / "missing")])
+
+    assert status == 1
+    assert "quantlab-trader:" in capsys.readouterr().err

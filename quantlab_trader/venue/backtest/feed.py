@@ -42,7 +42,9 @@ def build_feed(prices: xr.Dataset, resolver: BacktestResolver) -> list:
     Parameters
     ----------
     prices : xarray.Dataset
-        Raw ``open``, ``high``, ``low`` and ``close`` on ``(timestamp, symbol)``.
+        Raw ``open`` and ``close`` on ``(timestamp, symbol)``, and ``high``
+        and ``low`` when the dataset has them (the bar's range otherwise
+        spans the open and close).
     resolver : BacktestResolver
         Maps each symbol to its instrument.
 
@@ -58,8 +60,11 @@ def build_feed(prices: xr.Dataset, resolver: BacktestResolver) -> list:
         permno = resolver.permno(instrument.id)
         row = prices.sel(symbol=permno)
         opens, closes = row["open"].values, row["close"].values
-        highs = np.fmax(np.fmax(row["high"].values, opens), closes)
-        lows = np.fmin(np.fmin(row["low"].values, opens), closes)
+        highs, lows = np.fmax(opens, closes), np.fmin(opens, closes)
+        if "high" in row:
+            highs = np.fmax(row["high"].values, highs)
+        if "low" in row:
+            lows = np.fmin(row["low"].values, lows)
         bar_type = BarType.from_str(f"{instrument.id}-1-DAY-LAST-EXTERNAL")
         for i in range(len(dates)):
             if np.isfinite(opens[i]):

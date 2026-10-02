@@ -9,9 +9,11 @@
 - ``equity.zarr``: ``value`` (cash plus holdings at the raw close) and
   ``returns`` on ``timestamp``, quantlab's layout;
 - ``orders.zarr``: one row per next-open order on ``order``: ``decision_date``,
-  ``symbol``, ``side``, ``quantity``, ``status`` (``filled``, ``unfilled``,
-  ``rejected``, ``denied``, ``submitted``), ``fill_price`` (volume-weighted),
-  ``fee`` and ``reason``;
+  ``symbol``, ``side``, ``quantity``, ``status`` (``filled``,
+  ``partially_filled``, ``unfilled``, ``rejected``, ``denied``, or
+  ``submitted``/``pending`` for an order the run ended on),
+  ``filled_quantity``, ``fill_price`` (volume-weighted), ``fee`` and
+  ``reason``;
 - ``events.json``: ``{"events": [...]}``, each with a ``type``: holds, rule
   events, unfilled orders.
 
@@ -149,7 +151,7 @@ class RunRecorder:
 
     def _write_config(self, path: Path) -> None:
         config = self.config.get_config()
-        config["quantlab_data_fingerprint"] = self.run.config.get("data_fingerprint")
+        config["quantlab_data_fingerprint"] = self.run.data_fingerprint
         path.write_text(json.dumps(config, indent=2))
 
     def _decisions_dataset(self) -> xr.Dataset:

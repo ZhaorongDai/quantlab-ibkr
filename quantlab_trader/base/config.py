@@ -47,6 +47,7 @@ class VenueConfig(ABC):
         start: pd.Timestamp,
         end: pd.Timestamp,
         permnos: tuple,
+        loop: str,
     ) -> Venue:
         """Return the venue that executes ``run`` from ``start`` to ``end``.
 
@@ -58,11 +59,14 @@ class VenueConfig(ABC):
             The replay window, both inclusive.
         permnos : tuple
             The securities the strategy can trade (quantlab's symbol labels).
+        loop : {"closed", "open"}
+            The replay's loop; a backtest venue picks its default fee model
+            from it (ADR 0003), a live venue ignores it.
         """
 
     def get_config(self) -> dict[str, Any]:
         """Return the fields as JSON values plus ``"name"``, the class's import path."""
-        return {**_to_json(self), "name": _import_path(self)}
+        return {**dataclasses.asdict(self), "name": _import_path(self)}
 
     @classmethod
     def from_config(cls, config: Mapping[str, Any]) -> Self:
@@ -71,11 +75,7 @@ class VenueConfig(ABC):
         Called on ``VenueConfig`` itself, the subclass named by ``"name"``
         rebuilds it; called on a subclass, that subclass does.
         """
-        target = cls
-        if "name" in config:
-            target = get_cls_from_path(config["name"])
-            if not (isinstance(target, type) and issubclass(target, cls)):
-                raise TypeError(f"{config['name']} is not a {cls.__name__}")
+        target = _class_named(config["name"], cls) if "name" in config else cls
         fields = {k: v for k, v in config.items() if k != "name"}
         return target._from_fields(fields)
 
@@ -85,9 +85,12 @@ class VenueConfig(ABC):
         return cls(**fields)
 
 
-def _to_json(obj: Any) -> dict[str, Any]:
-    """Return the dataclass ``obj`` as a dict; nested dataclasses become dicts."""
-    return dataclasses.asdict(obj)
+def _class_named(path: str, base: type) -> type:
+    """Return the class at import ``path``, refusing one that is not a ``base``."""
+    target = get_cls_from_path(path)
+    if not (isinstance(target, type) and issubclass(target, base)):
+        raise TypeError(f"{path} is not a {base.__name__}")
+    return target
 
 
 @dataclass(frozen=True)
@@ -160,5 +163,5 @@ class TraderConfig:
         fields["venue"] = VenueConfig.from_config(fields["venue"])
         tracker = fields.get("tracker")
         if tracker is not None:
-            fields["tracker"] = get_cls_from_path(tracker["name"]).from_config(tracker)
+            fields["tracker"] = _class_named(tracker["name"], Tracker).from_config(tracker)
         return cls(**fields)

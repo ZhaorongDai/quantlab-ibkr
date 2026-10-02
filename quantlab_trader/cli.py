@@ -61,7 +61,12 @@ def main(argv: Sequence[str] | None = None) -> int:
             end=args.end,
             output_dir=args.output_dir,
         )
-    print(run(config))
+    try:
+        run_dir = run(config)
+    except (ValueError, NotImplementedError) as error:
+        print(f"quantlab-trader: {error}", file=sys.stderr)
+        return 1
+    print(run_dir)
     return 0
 
 

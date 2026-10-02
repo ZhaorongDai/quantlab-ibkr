@@ -51,6 +51,8 @@ class QuantlabRun:
         The run's fee, a fraction of the traded notional.
     slippage : float
         The run's slippage, a fraction of the fill price.
+    data_fingerprint : dict or None
+        The run's record of the data it read, for a trader run's config.
     """
 
     run_dir: Path
@@ -62,6 +64,7 @@ class QuantlabRun:
     init_cash: float
     fees: float
     slippage: float
+    data_fingerprint: dict | None
 
     @classmethod
     def load(cls, run_dir: str | Path) -> Self:
@@ -79,11 +82,13 @@ class QuantlabRun:
         Raises
         ------
         ValueError
-            If ``config.json`` has no ``market`` block, the price dataset is
+            If ``run_dir`` has no ``config.json``, it has no ``market`` block, the price dataset is
             not a ``MarketDataset``, or its store lacks any of
             ``REQUIRED_PRICE_VARIABLES``.
         """
         run_dir = Path(run_dir).resolve()
+        if not (run_dir / "config.json").is_file():
+            raise ValueError(f"{run_dir} is not a quantlab run directory: no config.json")
         config = json.loads((run_dir / "config.json").read_text())
         market = config.get("market")
         if not market:
@@ -117,6 +122,7 @@ class QuantlabRun:
             init_cash=float(config["init_cash"]),
             fees=float(config["fees"]),
             slippage=float(config["slippage"]),
+            data_fingerprint=config.get("data_fingerprint"),
         )
 
     def rebalance_table(self) -> xr.Dataset:
