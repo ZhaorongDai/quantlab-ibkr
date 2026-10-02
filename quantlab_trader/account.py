@@ -49,7 +49,7 @@ def derived_cash(cache) -> float:
     account = accounts[0]
     balance = account.balance_total(account.base_currency).as_double()
     cost = sum(
-        float(position.signed_qty) * position.avg_px_open
+        float(position.signed_decimal_qty()) * position.avg_px_open
         for position in cache.positions_open()
     )
     return balance - cost

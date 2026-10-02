@@ -483,7 +483,7 @@ class CorporateActionModule(SimulationModule):
 
     def _book(self, position, day: CorporateActionDay, ts_now: int) -> None:
         """Book ``day`` on ``position``: its dividend, then its factor day."""
-        quantity = int(round(position.signed_qty))
+        quantity = int(position.signed_decimal_qty())
         if not quantity:
             return
         report = dict(ts_ns=ts_now, permno=day.permno, quantity=quantity)
@@ -549,9 +549,10 @@ class CorporateActionModule(SimulationModule):
 
     def _settle(self, position, price: float) -> None:
         """Close ``position`` at ``price``: the delisting settlement."""
-        quantity = abs(int(round(position.signed_qty)))
+        signed = int(position.signed_decimal_qty())
+        quantity = abs(signed)
         if quantity:
-            side = OrderSide.SELL if position.signed_qty > 0 else OrderSide.BUY
+            side = OrderSide.SELL if signed > 0 else OrderSide.BUY
             self._venue_fill(position, side, quantity, price, "DELIST")
 
     def _venue_fill(self, position, side: OrderSide, quantity: int, price: float, kind: str) -> None:
