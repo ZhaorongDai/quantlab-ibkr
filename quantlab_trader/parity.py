@@ -56,7 +56,7 @@ import math
 import shutil
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
@@ -803,9 +803,13 @@ def _fill(open_price: float, side: str, quantity: float, conventions: _Conventio
 
 
 def _nautilus_money(value: float) -> float:
-    """``value`` at the cent as nautilus's ``Money`` stores it: half away from zero."""
-    raw = Decimal(repr(float(value))).quantize(Decimal("1e-9"), rounding=ROUND_HALF_UP)
-    return float(raw.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+    """``value`` at the cent as nautilus's ``Money`` stores a float: ``value * 100`` rounded
+    half away from zero, in binary (17.685 is 17.68: its double times 100 is 1768.4999...).
+    """
+    scaled = abs(float(value) * 10**_MONEY_DECIMALS)
+    whole = math.floor(scaled)
+    rounded = whole + 1 if scaled - whole >= 0.5 else whole
+    return math.copysign(rounded, value) / 10**_MONEY_DECIMALS
 
 
 def _decide(weights, position, mark, equity, whole):

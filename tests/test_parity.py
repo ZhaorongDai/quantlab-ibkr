@@ -456,3 +456,18 @@ def test_the_cli_refuses_a_directory_that_is_not_a_run(tmp_path, capsys):
 
     assert main(["parity", "--quantlab-run", str(tmp_path / "missing")]) == 1
     assert "quantlab-trader:" in capsys.readouterr().err
+
+
+def test_l5_rounds_a_fee_at_half_a_cent_as_trader_does(tmp_path):
+    # 1179 shares at 15.00 with a 0.1% fee: 17.685 in decimals, a hair below
+    # in binary; nautilus rounds the binary value times 100, half away from 0.
+    bars = pd.bdate_range("2024-01-02", periods=3)
+    run_dir = build_quantlab_run(
+        tmp_path / "quantlab", bars, {10001: [15.0, 15.0, 15.0]}, {10001: [15.0, 15.0, 15.0]},
+        {10001: [1.0, NAN, NAN]}, init_cash=17_685.5, fees=0.001,
+    )
+
+    report, data = _report(parity(run_dir, output_dir=tmp_path / "parity"))
+
+    assert _orders(data, "T")["fee"].tolist() == _orders(data, "L5")["fee"].tolist() == [17.68]
+    assert report["checks"]["T_equals_L5"]["passed"]
