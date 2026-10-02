@@ -36,7 +36,8 @@ from quantlab_trader.venue.backtest.feed import (
     opening_prints,
     session_ns,
 )
-from quantlab_trader.venue.backtest.fees import FractionFeeModel
+from quantlab_trader.venue.backtest.fees import FractionFeeModel, IbkrFixedFeeModel
+from quantlab_trader.venue.backtest.fills import FractionSlippageFillModel
 from quantlab_trader.venue.backtest.resolver import SYNTHETIC_VENUE, BacktestResolver
 from quantlab_trader.venue.backtest.source import BacktestDecisionSource
 from quantlab_trader.venue.backtest.submitter import BacktestOpenSubmitter
@@ -48,6 +49,11 @@ if TYPE_CHECKING:
 #: decision (at close + 1 ns) fires.
 _AFTER_LAST_CLOSE = pd.Timedelta(hours=1)
 
+#: The fee model each loop takes when ``ExecutionConfig.fee_model`` is None
+#: (ADR 0003): closed loop costs what the IBKR account will, open loop what
+#: the quantlab run charged.
+_DEFAULT_FEE_MODEL = {"closed": "ibkr_fixed", "open": "fraction"}
+
 
 @dataclass(frozen=True)
 class ExecutionConfig:
@@ -56,17 +62,37 @@ class ExecutionConfig:
     Parameters
     ----------
     fee_model : {"fraction", "ibkr_fixed"} or None
-        ``"fraction"`` charges the run's ``fees`` fraction of the notional;
-        ``None`` takes the loop's default (open loop: ``"fraction"``).
+        ``"fraction"`` charges the run's ``fees`` fraction of the notional,
+        ``"ibkr_fixed"`` IBKR Pro Fixed plus the SEC fee on sales; ``None``
+        takes the loop's default (closed loop: ``"ibkr_fixed"``, open loop:
+        ``"fraction"``).
     slippage : float or None
-        Fractional slippage; ``None`` takes the run's.
+        Fractional slippage in ``[0, 1)``, against the order; ``None`` takes
+        the run's.
     init_cash : float or None
-        Starting cash; ``None`` takes the run's.
+        Starting cash, positive; ``None`` takes the run's.
+
+    Raises
+    ------
+    ValueError
+        For an unknown fee model, a slippage outside ``[0, 1)`` or a
+        starting cash that is not positive.
     """
 
     fee_model: Literal["fraction", "ibkr_fixed"] | None = None
     slippage: float | None = None
     init_cash: float | None = None
+
+    def __post_init__(self):
+        if self.fee_model not in (None, "fraction", "ibkr_fixed"):
+            raise ValueError(
+                f"ExecutionConfig.fee_model must be 'fraction', 'ibkr_fixed' or None, "
+                f"got {self.fee_model!r}"
+            )
+        if self.slippage is not None and not 0.0 <= self.slippage < 1.0:
+            raise ValueError(f"ExecutionConfig.slippage must lie in [0, 1), got {self.slippage}")
+        if self.init_cash is not None and not self.init_cash > 0:
+            raise ValueError(f"ExecutionConfig.init_cash must be positive, got {self.init_cash}")
 
     def get_config(self) -> dict[str, Any]:
         """Return the fields as JSON values.
@@ -140,12 +166,19 @@ class BacktestVenue(Venue):
     loop : {"open", "closed"}
         The replay's loop, which picks the default fee model.
 
+    Attributes
+    ----------
+    fee_model : FractionFeeModel or IbkrFixedFeeModel
+        The resolved fee model.
+    fill_model : FractionSlippageFillModel
+        The resolved slippage.
+    init_cash : float
+        The resolved starting cash.
+
     Raises
     ------
     ValueError
-        For an execution setting this version cannot simulate yet: the
-        ``"ibkr_fixed"`` fee model, a closed-loop default fee, or nonzero
-        slippage.
+        If the run's own slippage lies outside ``[0, 1)``.
     """
 
     def __init__(
@@ -158,20 +191,13 @@ class BacktestVenue(Venue):
         permnos: tuple,
         loop: str,
     ):
-        fee_model = execution.fee_model or ("fraction" if loop == "open" else "ibkr_fixed")
-        if fee_model != "fraction":
-            raise ValueError(
-                f"BacktestVenue: fee model {fee_model!r} is not available yet; "
-                f"set execution.fee_model='fraction'"
-            )
+        fee_model = execution.fee_model or _DEFAULT_FEE_MODEL[loop]
+        self.fee_model = (
+            FractionFeeModel(run.fees) if fee_model == "fraction" else IbkrFixedFeeModel()
+        )
         slippage = run.slippage if execution.slippage is None else execution.slippage
-        if slippage != 0.0:
-            raise ValueError(
-                f"BacktestVenue: slippage {slippage} cannot be simulated yet; set "
-                f"execution.slippage=0 to replay without it"
-            )
+        self.fill_model = FractionSlippageFillModel(slippage)
         self.init_cash = run.init_cash if execution.init_cash is None else execution.init_cash
-        self.fee_rate = run.fees
         self.source = BacktestDecisionSource(run, start, end, permnos)
         calendar = self.source.calendar()
         self.resolver = BacktestResolver(permnos, calendar[0])
@@ -196,7 +222,8 @@ class BacktestVenue(Venue):
                 [Money(self.init_cash, USD)],
                 base_currency=USD,
                 default_leverage=Decimal(1),
-                fee_model=FractionFeeModel(self.fee_rate),
+                fee_model=self.fee_model,
+                fill_model=self.fill_model,
                 modules=[
                     CorporateActionModule(
                         self.corporate_actions,
