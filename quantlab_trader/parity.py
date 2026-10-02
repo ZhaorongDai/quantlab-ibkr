@@ -684,6 +684,7 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
     kind = _factor_days(split_factor, share_factor)
     kind[0] = ""
 
+    book = _NautilusMoney(conventions.init_cash, n_symbols) if costs else None
     cash = float(conventions.init_cash)
     position = np.zeros(n_symbols)
     equity = np.empty(n_bars)
@@ -708,6 +709,8 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
                 )
                 if dividend[i, j] and not payment:
                     cash += money(q * dividend[i, j])
+                    if book:
+                        book.credit(money(q * dividend[i, j]))
                 k = split_factor[i, j]
                 if kind[i, j] == "SPLIT":
                     if whole:
@@ -715,17 +718,26 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
                         fraction = q * k - shares
                         if fraction and np.isfinite(pre_close[i, j]):
                             cash += money(fraction * pre_close[i, j] / k)
+                            if book:
+                                book.credit(money(fraction * pre_close[i, j] / k))
+                        if book and shares != q:
+                            # The venue's split fill: the share change at price 0.
+                            book.fill(j, q, shares - q, 0.0, 0.0)
                         position[j] = shares
                     else:
                         position[j] = q * k
                 elif kind[i, j] == "DISTRIBUTION":
                     price = close[i, j] if np.isfinite(close[i, j]) else pre_close[i, j] / k
                     cash += money(q * (k - 1.0) * price)
+                    if book:
+                        book.credit(money(q * (k - 1.0) * price))
             for j in np.flatnonzero(market.delisted[i - 1]):
                 price = last_value[i - 1, j]
                 if position[j] == 0 or not np.isfinite(price):
                     continue
                 cash += position[j] * price
+                if book:
+                    book.fill(j, position[j], -position[j], float(price), 0.0)
                 settlements.append((timestamps[i], symbols[j], float(price), float(position[j])))
                 position[j] = 0.0
             # The open: the orders decided at the close of i - 1.
@@ -744,9 +756,13 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
                 price, fee = _fill(market.open[i, j], side, quantity, conventions)
                 sign = 1.0 if side == "BUY" else -1.0
                 cash -= sign * quantity * price + fee
+                if book:
+                    book.fill(j, position[j], sign * quantity, price, fee)
+                position[j] += sign * quantity
+                if book:
+                    cash = book.cash(position)
                 if side == "BUY" and cash < 0:
                     capped += 1
-                position[j] += sign * quantity
                 traded[j] += sign * decided  # in the decision's (pre-split) shares
                 orders.append((timestamps[i], symbols[j], side, quantity, price, fee))
             if decision is not None:
@@ -756,6 +772,8 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
             pending, decision = [], None
         # The close: mark, then decide.
         held = position != 0
+        if book:
+            cash = book.cash(position)
         if not np.isfinite(mark[i, held]).all():
             raise ValueError(f"{name} at {timestamps[i].date()}: a holding has no raw close")
         equity[i] = cash + float(np.sum(position[held] * mark[i, held]))
@@ -774,6 +792,52 @@ def _trader_ledger(market: _Market, conventions: _Conventions, name: str) -> Run
         buys_capped=capped,
         peak_cash_debit=max(0.0, -float(cash_path.min())),
     )
+
+
+class _NautilusMoney:
+    """L5's cash, kept as trader's account derives it from nautilus.
+
+    trader's cash is a MARGIN account's balance less the open positions'
+    cost, ``signed_qty * avg_px_open`` (``account.derived_cash``). nautilus
+    books into that balance, per fill, the commission and, on a fill that
+    reduces a position, the realized PnL ``closed_qty * (fill px -
+    avg_px_open)`` (the reverse for a short) as ``Money``, rounded to the
+    cent; a fill that adds to a position moves its average open price
+    instead, ``(avg * qty + px * fill_qty) / (qty + fill_qty)``. Cash credits
+    (dividends, cash in lieu, distributions) are cents. Kept this way, L5's
+    equity is trader's to float precision, so a whole-share target on a
+    truncation boundary is cut the same way in both; an exact-notional cash
+    differs by the PnL's rounding, a few cents over thousands of fills.
+    """
+
+    def __init__(self, init_cash: float, n_symbols: int):
+        self.cents = round(float(init_cash) * 10**_MONEY_DECIMALS)
+        self.avg = np.zeros(n_symbols)
+
+    def credit(self, amount: float) -> None:
+        """Book ``amount`` (at the cent) into the balance."""
+        self.cents += round(amount * 10**_MONEY_DECIMALS)
+
+    def fill(self, j: int, held: float, signed_qty: float, price: float, fee: float) -> None:
+        """Book a fill of ``signed_qty`` at ``price`` on column ``j``, holding ``held`` before it."""
+        qty = abs(signed_qty)
+        if held and (held > 0) != (signed_qty > 0):
+            closed = min(qty, abs(held))
+            points = price - self.avg[j] if held > 0 else self.avg[j] - price
+            self.credit(_nautilus_money(closed * 1.0 * points))
+            if qty > abs(held):
+                self.avg[j] = price
+            elif qty == abs(held):
+                self.avg[j] = 0.0
+        else:
+            start = abs(held)
+            self.avg[j] = (self.avg[j] * start + price * qty) / (start + qty)
+        self.credit(-fee)
+
+    def cash(self, position: np.ndarray) -> float:
+        """trader's derived cash: the balance less the open positions' cost."""
+        held = position != 0
+        return self.cents / 10**_MONEY_DECIMALS - float(np.sum(position[held] * self.avg[held]))
 
 
 def _factor_days(split_factor: np.ndarray, share_factor: np.ndarray) -> np.ndarray:

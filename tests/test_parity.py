@@ -498,3 +498,15 @@ def test_l5_rounds_a_fee_at_half_a_cent_as_trader_does(tmp_path):
 
     assert _orders(data, "T")["fee"].tolist() == _orders(data, "L5")["fee"].tolist() == [17.68]
     assert report["checks"]["T_equals_L5"]["passed"]
+
+
+@pytest.mark.parametrize("case", ["full", "full_ibkr"])
+def test_l5_cash_is_trader_cash_to_the_float(case, request):
+    # trader's cash is nautilus's margin balance, which books each reducing
+    # fill's realized PnL rounded to the cent, less the open positions' cost
+    # at their average open price. L5 keeps its money the same way, so the
+    # equity both size from agrees to float precision, and a whole-share
+    # target on a truncation boundary is cut the same way in both.
+    _, (report, data) = request.getfixturevalue(case)
+
+    np.testing.assert_allclose(_equity(data, "T"), _equity(data, "L5"), rtol=0, atol=1e-6)
