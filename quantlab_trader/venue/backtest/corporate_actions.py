@@ -406,7 +406,7 @@ class CorporateActionModule(SimulationModule):
 
     def _settle(self, position, price: float) -> None:
         """Close ``position`` at ``price``: the delisting settlement."""
-        quantity = abs(int(position.signed_qty))
+        quantity = abs(int(round(position.signed_qty)))
         if quantity:
             side = OrderSide.SELL if position.signed_qty > 0 else OrderSide.BUY
             self._venue_fill(position, side, quantity, price, "DELIST")

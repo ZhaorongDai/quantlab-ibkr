@@ -134,6 +134,8 @@ class PortfolioStrategy(Strategy):
         the venue booked it on the strategy's position for a corporate
         action, so it is recorded in the run's events, never as an order.
         """
+        # Quantity.as_double() is inexact for many share counts (59353 is
+        # 59352.99999999999), so the count is read from its decimal.
         kind = corporate_action_kind(self.cache.order(event.client_order_id).tags)
         if kind is not None:
             self.recorder.corporate_action(
@@ -141,12 +143,12 @@ class PortfolioStrategy(Strategy):
                 ts_ns=event.ts_event,
                 permno=self.venue.resolver.permno(event.instrument_id),
                 side=event.order_side.name,
-                quantity=int(event.last_qty.as_double()),
+                quantity=int(event.last_qty.as_decimal()),
                 price=event.last_px.as_double(),
                 fee=event.commission.as_double(),
             )
             return
-        quantity = int(event.last_qty.as_double())
+        quantity = int(event.last_qty.as_decimal())
         price = event.last_px.as_double()
         self.recorder.order_filled(
             event.client_order_id.value,

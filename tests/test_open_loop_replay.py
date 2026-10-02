@@ -236,3 +236,27 @@ def test_every_next_open_order_of_a_bar_is_submitted_however_many(tmp_path):
     assert len(orders) == 150
     assert (orders["status"] == "filled").all()
     assert (orders["filled_quantity"] == 500).all()
+
+
+def test_a_fill_of_a_quantity_whose_double_is_inexact_is_recorded_whole(tmp_path):
+    # nautilus's Quantity(59353).as_double() is 59352.99999999999; a fill of
+    # 59353 shares must be recorded as 59353 filled, not 59352 and partial.
+    bars = pd.bdate_range("2023-03-29", periods=3)
+    open_ = {10001: [0.1150, 0.1155, 0.1126]}
+    close = {10001: [0.1202, 0.1131, 0.1080]}
+    init_cash = (59353 + 0.5) * 0.1202 / 0.5
+    quantlab_run = build_quantlab_run(
+        tmp_path / "quantlab", bars, open_, close, {10001: [0.5, NAN, NAN]},
+        init_cash=init_cash, fees=0.0005,
+    )
+    run_dir = run(
+        TraderConfig(
+            quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
+            output_dir=str(tmp_path / "trader"),
+        )
+    )
+
+    orders = xr.open_zarr(run_dir / "orders.zarr").load().to_dataframe()
+    assert orders["quantity"].tolist() == [59353]
+    assert orders["filled_quantity"].tolist() == [59353]
+    assert orders["status"].tolist() == ["filled"]

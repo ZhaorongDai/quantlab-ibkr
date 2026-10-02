@@ -63,7 +63,8 @@ class FractionFeeModel(FeeModel):
         """Return ``rate * fill_qty * fill_px`` in the instrument's quote currency."""
         if is_fee_free(order):
             return Money(0, instrument.quote_currency)
-        notional = fill_qty.as_double() * fill_px.as_double()
+        # The share count from its decimal: Quantity.as_double() is inexact for many.
+        notional = float(fill_qty.as_decimal()) * fill_px.as_double()
         return Money(notional * self.rate, instrument.quote_currency)
 
 
