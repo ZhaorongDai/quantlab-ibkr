@@ -10,7 +10,7 @@ readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "quantlab",
-    "nautilus-trader>=1.231.0",
+    "nautilus-trader>=1.231.0,<2",  # latest stable; 2.0 is still a release candidate
 ]
 
 [tool.uv.sources]
