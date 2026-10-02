@@ -2,14 +2,17 @@
 
 Two locks:
 
-- an ``ast`` scan of every trader module but ``parity.py``: each ``import`` of
-  quantlab names a module on ``ALLOWED`` (or a name inside one);
+- an ``ast`` scan of every trader module: each ``import`` of quantlab names a
+  module on ``ALLOWED`` (or a name inside one); ``parity.py`` alone may also
+  import quantlab's backtest layer, to run the ladder's quantlab rungs
+  (ADR 0007);
 - a subprocess that replays a fixture run through ``runner.run`` and then
   finds none of quantlab's model, factor, label or backtest layers, nor torch,
   xgboost, KunQuant or vectorbt, in ``sys.modules``, open loop and closed
-  loop (TopN; mean-variance with Ledoit-Wolf, which loads cvxpy). The
-  rule's, dataset's and tracker's modules may still load by class path from
-  ``config.json``.
+  loop (TopN; mean-variance with Ledoit-Wolf, which loads cvxpy), with the
+  command line imported (it imports ``parity`` only inside the ``parity``
+  command). The rule's, dataset's and tracker's modules may still load by
+  class path from ``config.json``.
 """
 
 import ast
@@ -73,15 +76,25 @@ def _quantlab_imports(path: Path) -> list[str]:
     return found
 
 
+#: The one module allowed to import quantlab's backtest layer, too.
+PARITY = PACKAGE / "parity.py"
+
+
+def _allowed(path: Path, name: str) -> bool:
+    if name in ALLOWED:
+        return True
+    return path == PARITY and (name == "quantlab.backtest" or name.startswith("quantlab.backtest."))
+
+
 def test_trader_source_imports_only_the_quantlab_allowlist():
-    modules = [p for p in PACKAGE.rglob("*.py") if p.name != "parity.py"]
-    assert len(modules) > 10
+    modules = list(PACKAGE.rglob("*.py"))
+    assert len(modules) > 10 and PARITY in modules
 
     offending = {
         str(p.relative_to(PACKAGE)): name
         for p in modules
         for name in _quantlab_imports(p)
-        if name not in ALLOWED
+        if not _allowed(p, name)
     }
 
     assert offending == {}
@@ -146,6 +159,7 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
     script = textwrap.dedent(
         f"""
         import json, sys
+        import quantlab_trader.cli
         from quantlab_trader.base.config import TraderConfig
         from quantlab_trader.runner import run
         from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
@@ -155,6 +169,7 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
             loop={loop!r}, output_dir={str(tmp_path / "trader")!r},
         ))
         loaded = [m for m in sys.modules if m.startswith({FORBIDDEN!r})]
+        loaded += [m for m in sys.modules if m == "quantlab_trader.parity"]
         print(json.dumps({{"run_dir": str(run_dir), "loaded": loaded}}))
         """
     )

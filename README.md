@@ -5,9 +5,18 @@ NautilusTrader, driven directly by the backtest configuration quantlab writes.
 
 ## Status
 
-Open-loop replay works end to end: `quantlab-trader backtest --quantlab-run DIR --loop open`
-executes a quantlab run's rebalance table (`weights.zarr`) on NautilusTrader and writes a trader
-run directory. The design is in `docs/adr/`; the v1 spec is issue #18.
+`quantlab-trader backtest --quantlab-run DIR` replays a quantlab run on NautilusTrader and writes a
+trader run directory: closed loop by default (quantlab's portfolio rule decides every rebalance bar
+on the holdings the account has), or `--loop open` to execute the run's rebalance table
+(`weights.zarr`) as it is.
+
+`quantlab-trader parity --quantlab-run DIR [--output-dir DIR] [--fee-model fraction|ibkr_fixed]`
+writes the run's parity report (`parity.json` + `parity.zarr`, ADR 0007): the ladder from
+quantlab's vectorbt run to trader's open loop one convention at a time, its end checks (the
+command exits with 2 when one fails) and, for a run with a prediction panel, closed versus open
+loop.
+
+The design is in `docs/adr/`; the v1 spec is issue #18.
 
 ```
 uv sync
