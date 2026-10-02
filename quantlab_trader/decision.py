@@ -4,8 +4,11 @@
 the close of every bar, in the backtest and live alike. It marks equity at t's
 raw close, asks its ``TargetSource`` for the bar's target weights and sizes
 each finite target into ``trunc(w * equity / close) - position`` shares, sells
-first. A NaN target keeps the holding. Closed and open loop differ only in the
-target source.
+first. A NaN target keeps the holding, and so does a target equal to the
+holding's current weight (a locked position the rule kept). Closed and open
+loop differ only in the target source: ``ConstructorTargets`` runs quantlab's
+``build_context`` + ``decide`` on the rebalance calendar, ``TableTargets``
+reads a ``weights.zarr`` row. Both return quantlab's ``Decision``.
 
 This module imports no nautilus code: it is tested on plain arrays.
 """
@@ -15,41 +18,15 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
+from quantlab.base.portfolio import Decision, PortfolioConstructor
 from quantlab_trader.base.venue import DecisionInputs, NextOpenOrder
-
-
-@dataclass(frozen=True)
-class Decision:
-    """One bar's targets: weights to hold after the bar, or a hold with its reason.
-
-    trader's record of a decision, with the fields of quantlab's constructor
-    decision (weights, failure, events), so the closed loop's constructor
-    targets and the open loop's table rows reach the cycle and the run
-    directory in one shape.
-
-    Attributes
-    ----------
-    weights : pandas.Series
-        Target weight per PERMNO; NaN keeps the holding.
-    failure : str or None
-        Why the bar was held, or ``None``.
-    events : tuple of dict
-        The rule's events of this bar.
-
-    Examples
-    --------
-    >>> Decision(pd.Series({10001: 0.5})).failure is None
-    True
-    """
-
-    weights: pd.Series
-    failure: str | None = None
-    events: tuple[dict, ...] = field(default_factory=tuple)
+from quantlab_trader.calendar import RebalanceCalendar
 
 
 @dataclass(frozen=True)
@@ -58,8 +35,10 @@ class CycleResult:
 
     Attributes
     ----------
-    decision : Decision or None
-        The bar's decision; ``None`` on a bar that does not rebalance.
+    decision : quantlab.base.portfolio.Decision or None
+        The bar's decision (weights on ``symbol``, all NaN to hold, the
+        failure that made it a hold, the rule's events); ``None`` on a bar
+        that does not rebalance.
     orders : tuple of NextOpenOrder
         The sized orders, sells first.
     equity : float
@@ -97,7 +76,7 @@ class TableTargets(TargetSource):
     Examples
     --------
     >>> table = pd.DataFrame({10001: [0.5]}, index=[pd.Timestamp("2024-01-03")])
-    >>> TableTargets(table).row(pd.Timestamp("2024-01-03")).weights.tolist()
+    >>> TableTargets(table).row(pd.Timestamp("2024-01-03")).weights.values.tolist()
     [0.5]
     >>> TableTargets(table).row(pd.Timestamp("2024-01-04")) is None
     True
@@ -110,13 +89,66 @@ class TableTargets(TargetSource):
         """Return the table's row at ``t`` as a decision, or ``None`` without one."""
         if t not in self._table.index:
             return None
-        return Decision(self._table.loc[t].astype(float))
+        row = self._table.loc[t].astype(float)
+        return Decision(
+            weights=xr.DataArray(row.to_numpy(), dims="symbol", coords={"symbol": row.index})
+        )
 
     def targets(
         self, inputs: DecisionInputs, current_weights: pd.Series
     ) -> Decision | None:
         """Return the table's row at the decision date; holdings play no part."""
         return self.row(inputs.timestamp)
+
+
+class ConstructorTargets(TargetSource):
+    """Closed loop: quantlab's constructor decides each rebalance bar on the account's holdings.
+
+    On a rebalance bar of ``calendar`` it hands the rule's ``build_context``
+    the bar's prediction row, tradability and decision-price history from
+    ``inputs`` and the holdings' current weights, then returns the rule's
+    ``decide``. A held security the prediction row lacks (live, a daily
+    panel without it) joins the context with NaN predictions, so the rule
+    treats it like any held name without a prediction; it is tradable where
+    the inputs say so and locked otherwise.
+
+    Parameters
+    ----------
+    constructor : quantlab.base.portfolio.PortfolioConstructor
+        The bound rule (``load_constructor``).
+    calendar : RebalanceCalendar
+        Which bars rebalance.
+    """
+
+    def __init__(self, constructor: PortfolioConstructor, calendar: RebalanceCalendar):
+        self.constructor = constructor
+        self.calendar = calendar
+
+    def targets(
+        self, inputs: DecisionInputs, current_weights: pd.Series
+    ) -> Decision | None:
+        """Return the rule's decision on a rebalance bar, ``None`` on any other."""
+        t = inputs.timestamp
+        if not self.calendar.rebalances(t):
+            return None
+        if inputs.predictions is None:
+            raise ValueError(f"ConstructorTargets at {t.date()}: the bar has no prediction row")
+        predictions = inputs.predictions.drop_vars("timestamp", errors="ignore")
+        held = current_weights[current_weights != 0.0]
+        symbols = pd.Index(predictions["symbol"].values)
+        absent = held.index[~held.index.isin(symbols)]
+        if len(absent):
+            symbols = symbols.append(pd.Index(absent))
+            predictions = predictions.reindex(symbol=symbols)
+        tradable = inputs.tradable.reindex(symbols, fill_value=False).astype(bool)
+        context = self.constructor.build_context(
+            t,
+            predictions,
+            xr.DataArray(tradable.to_numpy(), dims="symbol", coords={"symbol": symbols}),
+            xr.DataArray(held.to_numpy(dtype=float), dims="symbol", coords={"symbol": held.index}),
+            valuation_price=inputs.valuation_history,
+        )
+        return self.constructor.decide(context)
 
 
 class DecisionCycle:
@@ -190,24 +222,33 @@ class DecisionCycle:
             return CycleResult(None, (), equity, current_weights)
         return CycleResult(
             decision,
-            self._size(decision.weights, inputs, held, equity),
+            self._size(decision.weights, inputs, held, equity, current_weights),
             equity,
             current_weights,
         )
 
     @staticmethod
     def _size(
-        weights: pd.Series,
+        weights: xr.DataArray,
         inputs: DecisionInputs,
         held: Mapping[Hashable, int],
         equity: float,
+        current_weights: pd.Series,
     ) -> tuple[NextOpenOrder, ...]:
-        """Size each finite target into a whole-share order; sells first."""
+        """Size each finite target into a whole-share order; sells first.
+
+        A target equal to the holding's current weight keeps the position:
+        a rule keeps a locked position at exactly that weight, and sizing it
+        through ``trunc`` could round a share away.
+        """
         sells, buys = [], []
-        for permno, weight in weights.items():
+        for label, weight in zip(weights["symbol"].values, weights.values):
             if not _finite(weight):
                 continue
+            permno = _scalar(label)
             position = held.get(permno, 0)
+            if position and weight == current_weights.get(permno, np.nan):
+                continue
             if weight == 0.0:
                 target = 0
             else:
@@ -224,6 +265,11 @@ class DecisionCycle:
             elif delta < 0:
                 sells.append(NextOpenOrder(permno, "SELL", -delta, inputs.timestamp))
         return tuple(sells + buys)
+
+
+def _scalar(label):
+    """Return a symbol label as a plain Python scalar (numpy scalars unwrapped)."""
+    return label.item() if isinstance(label, np.generic) else label
 
 
 def _finite(value) -> bool:

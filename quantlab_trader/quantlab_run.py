@@ -3,8 +3,11 @@
 A quantlab run directory holds the backtest's ``config.json`` (the price
 dataset's config, the window, costs and the ``market`` block naming the fill
 and valuation price columns) and its outputs, among them the rebalance table
-``weights.zarr``. trader learns everything about the run here, without
-importing quantlab's backtest layer (which loads vectorbt).
+``weights.zarr``, and, for a run with a model, its prediction panel
+``predictions.zarr``, from which the run's portfolio construction rule is
+rebuilt (quantlab's ``load_constructor``). trader learns everything about
+the run here, without importing quantlab's backtest layer (which loads
+vectorbt).
 """
 
 from __future__ import annotations
@@ -18,6 +21,8 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.base.data import MarketDataset
+from quantlab.base.portfolio import PortfolioConstructor, PredictionPanel
+from quantlab.portfolio.prediction_panel import load_constructor
 from quantlab.utils.module import load_dataset_from_config
 
 #: Price variables trader cannot execute without: the raw open (fills) and
@@ -138,3 +143,57 @@ class QuantlabRun:
         """Return the run's ``weights.zarr``: ``weight`` on ``(timestamp, symbol)``, loaded."""
         with xr.open_zarr(self.run_dir / "weights.zarr") as table:
             return table.load()
+
+    def prediction_panel(self) -> PredictionPanel:
+        """Return the run's prediction panel, ``predictions.zarr``, loaded.
+
+        Raises
+        ------
+        ValueError
+            If the run has no ``predictions.zarr`` (a ``run_weights()`` run
+            has no model and so no panel).
+        """
+        return PredictionPanel.read(self._prediction_panel_path())
+
+    def constructor(self) -> PortfolioConstructor:
+        """Return the run's portfolio construction rule, bound to its label specs.
+
+        Refused (ADR 0005, spec #18 stories 33-34) are a run whose valuation
+        column is not an adjusted price (decision prices are adjusted, ADR
+        0002), a run without a prediction panel, and a rule that declares
+        ``required_factors()``, which trader cannot compute without the
+        factor layer.
+
+        Raises
+        ------
+        ValueError
+            For any of the refusals above.
+        """
+        valuation = self.market["valuation_price_column"]
+        if not valuation.startswith("adj"):
+            raise ValueError(
+                f"quantlab run {self.run_dir}: its valuation column {valuation!r} is not "
+                f"an adjusted price; a closed-loop replay decides on adjusted closes "
+                f"(ADR 0002)"
+            )
+        self._prediction_panel_path()
+        rule = load_constructor(self.run_dir)
+        if rule.required_factors():
+            raise ValueError(
+                f"quantlab run {self.run_dir}: {type(rule).__name__} declares "
+                f"required_factors(); trader cannot compute factors and does not "
+                f"replay such a rule closed-loop"
+            )
+        return rule
+
+    def _prediction_panel_path(self) -> Path:
+        """Return the path of ``predictions.zarr``, refusing a run without one."""
+        path = self.run_dir / PredictionPanel.FILE_NAME
+        if not path.exists():
+            raise ValueError(
+                f"quantlab run {self.run_dir} has no {PredictionPanel.FILE_NAME}; a "
+                f"closed-loop replay needs the prediction panel of a run with a "
+                f"model (run() or run_cv()); replay a run_weights() run with "
+                f"loop='open'"
+            )
+        return path

@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import pandas as pd
+import xarray as xr
 
 from quantlab.base.tracking import Tracker
 from quantlab.utils.module import get_cls_from_path
@@ -48,6 +49,8 @@ class VenueConfig(ABC):
         end: pd.Timestamp,
         permnos: tuple,
         loop: str,
+        predictions: xr.Dataset | None = None,
+        history_start: pd.Timestamp | None = None,
     ) -> Venue:
         """Return the venue that executes ``run`` from ``start`` to ``end``.
 
@@ -62,6 +65,14 @@ class VenueConfig(ABC):
         loop : {"closed", "open"}
             The replay's loop; a backtest venue picks its default fee model
             from it (ADR 0003), a live venue ignores it.
+        predictions : xarray.Dataset, optional
+            Closed loop: the prediction panel over the window, whose rows the
+            decision source hands out and whose symbols the decision inputs
+            are on.
+        history_start : pandas.Timestamp, optional
+            Closed loop: where the decision-price history starts,
+            ``bar_before(anchor, lookback_bars)`` (ADR 0008); ``start`` when
+            omitted.
         """
 
     def get_config(self) -> dict[str, Any]:

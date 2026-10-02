@@ -6,7 +6,11 @@ What is locked here (ADR 0003, ADR 0008):
 - equity is ``cash + sum(qty * close)``, marked at t's raw close;
 - a NaN weight keeps the holding (no order), a symbol absent from the row too;
 - sells come before buys;
-- a bar without targets (not a rebalance bar) yields no decision and no orders.
+- a bar without targets (not a rebalance bar) yields no decision and no orders;
+- a target equal to the holding's current weight (a locked position) keeps it;
+- closed loop: ``ConstructorTargets`` decides rebalance bars through quantlab's
+  ``build_context`` + ``decide``, and a held security missing from the
+  prediction row joins the context unpredicted.
 """
 
 import math
@@ -14,9 +18,14 @@ import math
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
+from quantlab.base.config import TopNConfig
+from quantlab.base.portfolio import Decision, LabelSpec
+from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab_trader.base.venue import DecisionInputs, NextOpenOrder
-from quantlab_trader.decision import DecisionCycle, TableTargets
+from quantlab_trader.calendar import RebalanceCalendar
+from quantlab_trader.decision import ConstructorTargets, DecisionCycle, TableTargets
 
 T = pd.Timestamp("2024-01-03")
 
@@ -88,7 +97,7 @@ def test_a_nan_weight_or_an_absent_symbol_keeps_the_holding():
     )
 
     assert result.orders == (NextOpenOrder(10002, "SELL", 3, T),)
-    assert math.isnan(result.decision.weights[10001])
+    assert math.isnan(result.decision.weights.sel(symbol=10001))
 
 
 def test_no_order_when_the_target_equals_the_position():
@@ -138,3 +147,99 @@ def test_a_nonzero_target_without_a_close_is_refused():
 def test_an_account_without_positive_equity_is_refused():
     with pytest.raises(ValueError, match="equity"):
         _cycle({10001: 0.5}).run(_inputs({10001: 10.0}), positions={10001: -1}, cash=10.0)
+
+
+def test_a_target_equal_to_the_current_weight_keeps_the_position():
+    # equity 123.45 + 2 * 13.7 = 150.85; 2 * 13.7 / 150.85 * 150.85 / 13.7
+    # is 1.9999999999999998, which trunc would size to 1 share.
+    cycle = DecisionCycle(_RepeatCurrent())
+
+    result = cycle.run(_inputs({10001: 13.7}), positions={10001: 2}, cash=123.45)
+
+    assert result.orders == ()
+
+
+class _RepeatCurrent(TableTargets):
+    """A target source that keeps every holding at its current weight (a locked rule)."""
+
+    def __init__(self):
+        pass
+
+    def targets(self, inputs, current_weights):
+        return Decision(
+            xr.DataArray(
+                current_weights.to_numpy(), dims="symbol",
+                coords={"symbol": current_weights.index},
+            )
+        )
+
+
+def _constructor_targets(t=T):
+    rule = TopNConstructor(TopNConfig(direction="long_only", top_n=1))
+    rule.bind([LabelSpec("ret", "raw", 1, 1)])
+    return ConstructorTargets(rule, RebalanceCalendar(pd.DatetimeIndex([t, t + pd.offsets.BDay()]), 1))
+
+
+def _closed_inputs(close: dict, predictions: dict, tradable: dict) -> DecisionInputs:
+    close = pd.Series(close, dtype=float)
+    return DecisionInputs(
+        timestamp=T,
+        predictions=xr.Dataset(
+            {"ret": ("symbol", list(predictions.values()))},
+            coords={"symbol": list(predictions)},
+        ),
+        tradable=pd.Series(tradable, dtype=bool),
+        close=close,
+        valuation_history=None,
+        delisted=pd.Series(False, index=close.index),
+    )
+
+
+def test_constructor_targets_decide_through_the_rule_on_a_rebalance_bar():
+    cycle = DecisionCycle(_constructor_targets())
+
+    result = cycle.run(
+        _closed_inputs({10001: 10.0, 10002: 20.0}, {10001: 0.1, 10002: 0.2},
+                       {10001: True, 10002: True}),
+        positions={},
+        cash=1000.0,
+    )
+
+    assert result.decision.weights.sel(symbol=10002).item() == 1.0
+    assert result.orders == (NextOpenOrder(10002, "BUY", 50, T),)
+
+
+def test_constructor_targets_skip_a_bar_that_does_not_rebalance():
+    cycle = DecisionCycle(_constructor_targets(t=T - pd.offsets.BDay()))
+
+    result = cycle.run(
+        _closed_inputs({10001: 10.0}, {10001: 0.1}, {10001: True}), positions={}, cash=10.0
+    )
+
+    assert result.decision is None
+
+
+def test_a_held_security_missing_from_the_prediction_row_is_decided_as_unpredicted():
+    # 10003 is held but the panel has no row for it: tradable, it is sold;
+    # without a fill price it would be locked and kept.
+    cycle = DecisionCycle(_constructor_targets())
+    close = {10001: 10.0, 10002: 20.0, 10003: 5.0}
+
+    sold = cycle.run(
+        _closed_inputs(close, {10001: 0.1, 10002: 0.2},
+                       {10001: True, 10002: True, 10003: True}),
+        positions={10003: 100},
+        cash=500.0,
+    )
+    kept = cycle.run(
+        _closed_inputs(close, {10001: 0.1, 10002: 0.2}, {10001: True, 10002: True}),
+        positions={10003: 100},
+        cash=500.0,
+    )
+
+    assert sold.orders == (
+        NextOpenOrder(10003, "SELL", 100, T),
+        NextOpenOrder(10002, "BUY", 50, T),
+    )
+    assert [o.permno for o in kept.orders] == [10002]
+    assert kept.decision.weights.sel(symbol=10003).item() == 0.5

@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 from quantlab_trader.base.venue import DecisionInputs, DecisionSource
 from quantlab_trader.quantlab_run import QuantlabRun
@@ -42,7 +43,14 @@ class BacktestDecisionSource(DecisionSource):
     ``tradable_bars``/``delisting_bars`` on the run's market columns, the raw
     close is carried forward over a security's missing bars (so a halted
     holding is marked at its last close), and the decision prices are the
-    run's valuation column from the window's first bar to t.
+    run's valuation column from ``history_start`` (the window's first bar by
+    default) to t.
+
+    With ``predictions`` (closed loop) each bar's inputs carry its row of
+    the prediction panel, and ``tradable`` and the decision prices are on
+    the panel's symbols, which a rule's context is built on (quantlab's
+    panel loop builds it on the same ones); otherwise they are on
+    ``permnos``.
 
     On a delisting bar b the raw close is the security's **last valuation**
     in raw prices: its last raw close grown by the valuation column's return
@@ -61,6 +69,11 @@ class BacktestDecisionSource(DecisionSource):
         The window, inclusive.
     permnos : Sequence
         The securities the strategy can trade.
+    predictions : xarray.Dataset, optional
+        The prediction panel over the window, one variable per label on
+        ``(timestamp, symbol)``.
+    history_start : pandas.Timestamp, optional
+        The first bar of the decision-price history; ``start`` by default.
     """
 
     def __init__(
@@ -69,19 +82,39 @@ class BacktestDecisionSource(DecisionSource):
         start: pd.Timestamp,
         end: pd.Timestamp,
         permnos: Sequence,
+        *,
+        predictions: xr.Dataset | None = None,
+        history_start: pd.Timestamp | None = None,
     ):
         dataset = run.price_dataset
+        fill_column = run.market["fill_price_column"]
+        valuation_column = run.market["valuation_price_column"]
         prices = dataset.panel(start, end, symbols=list(permnos)).load()
         self.prices = prices
         self._calendar = pd.DatetimeIndex(prices["timestamp"].values)
-        valuation_column = run.market["valuation_price_column"]
-        self._tradable = (
-            dataset.tradable_bars(prices, run.market["fill_price_column"]).to_pandas()
+        self._predictions = predictions
+        decision_symbols = (
+            list(permnos) if predictions is None else list(predictions["symbol"].values)
         )
+        history = (
+            dataset.panel(
+                start if history_start is None else history_start,
+                end,
+                symbols=decision_symbols,
+            )[[fill_column, valuation_column]]
+            .transpose("timestamp", "symbol")
+            .load()
+        )
+        self._tradable = (
+            dataset.tradable_bars(history.sel(timestamp=slice(start, end)), fill_column)
+            .to_pandas()
+        )
+        self._valuation = history[valuation_column]
         self._delisted = dataset.delisting_bars(prices, valuation_column).to_pandas()
-        self._valuation = prices[valuation_column].transpose("timestamp", "symbol")
         raw_close = prices["close"].transpose("timestamp", "symbol").to_pandas()
-        last_value = self._last_valuation(raw_close, self._valuation.to_pandas())
+        last_value = self._last_valuation(
+            raw_close, prices[valuation_column].transpose("timestamp", "symbol").to_pandas()
+        )
         self._settlements = self._delisting_settlements(last_value)
         self._close = raw_close.mask(self._delisted, last_value).ffill()
 
@@ -128,9 +161,12 @@ class BacktestDecisionSource(DecisionSource):
 
     def inputs(self, t: pd.Timestamp) -> DecisionInputs:
         """Return the inputs of the decision at the close of ``t``."""
+        predictions = None
+        if self._predictions is not None and t in self._predictions.indexes["timestamp"]:
+            predictions = self._predictions.sel(timestamp=t, drop=True)
         return DecisionInputs(
             timestamp=t,
-            predictions=None,
+            predictions=predictions,
             tradable=self._tradable.loc[t],
             close=self._close.loc[t],
             valuation_history=self._valuation.sel(timestamp=slice(None, t)),

@@ -15,6 +15,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import pandas as pd
+import xarray as xr
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.config import LoggingConfig
@@ -152,9 +153,14 @@ class BacktestVenueConfig(VenueConfig):
         end: pd.Timestamp,
         permnos: tuple,
         loop: str,
+        predictions: xr.Dataset | None = None,
+        history_start: pd.Timestamp | None = None,
     ) -> BacktestVenue:
         """Return the backtest venue replaying ``run`` from ``start`` to ``end``."""
-        return BacktestVenue(run, self.execution, start=start, end=end, permnos=permnos, loop=loop)
+        return BacktestVenue(
+            run, self.execution, start=start, end=end, permnos=permnos, loop=loop,
+            predictions=predictions, history_start=history_start,
+        )
 
 
 class BacktestVenue(Venue):
@@ -172,6 +178,10 @@ class BacktestVenue(Venue):
         The securities to create instruments for.
     loop : {"open", "closed"}
         The replay's loop, which picks the default fee model.
+    predictions : xarray.Dataset, optional
+        Closed loop: the window's prediction panel, for the decision source.
+    history_start : pandas.Timestamp, optional
+        Closed loop: the first bar of the decision-price history.
 
     Attributes
     ----------
@@ -198,6 +208,8 @@ class BacktestVenue(Venue):
         end: pd.Timestamp,
         permnos: tuple,
         loop: str,
+        predictions: xr.Dataset | None = None,
+        history_start: pd.Timestamp | None = None,
     ):
         if loop not in _DEFAULT_FEE_MODEL:
             raise ValueError(f"BacktestVenue: loop must be 'closed' or 'open', got {loop!r}")
@@ -205,7 +217,9 @@ class BacktestVenue(Venue):
         slippage = run.slippage if execution.slippage is None else execution.slippage
         self.fill_model = FractionSlippageFillModel(slippage)
         self.init_cash = run.init_cash if execution.init_cash is None else execution.init_cash
-        self.source = BacktestDecisionSource(run, start, end, permnos)
+        self.source = BacktestDecisionSource(
+            run, start, end, permnos, predictions=predictions, history_start=history_start
+        )
         calendar = self.source.calendar()
         self.resolver = BacktestResolver(permnos, calendar[0])
         self.corporate_actions = corporate_action_days(self.source.prices)

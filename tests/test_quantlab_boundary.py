@@ -6,8 +6,10 @@ Two locks:
   quantlab names a module on ``ALLOWED`` (or a name inside one);
 - a subprocess that replays a fixture run through ``runner.run`` and then
   finds none of quantlab's model, factor, label or backtest layers, nor torch,
-  xgboost, KunQuant or vectorbt, in ``sys.modules``. The rule's, dataset's and
-  tracker's modules may still load by class path from ``config.json``.
+  xgboost, KunQuant or vectorbt, in ``sys.modules``, open loop and closed
+  loop (TopN; mean-variance with Ledoit-Wolf, which loads cvxpy). The
+  rule's, dataset's and tracker's modules may still load by class path from
+  ``config.json``.
 """
 
 import ast
@@ -19,8 +21,15 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import pytest
+import xarray as xr
 
-from tests.quantlab_run_fixture import build_quantlab_run
+from quantlab.base.config import LedoitWolfConfig, MeanVarianceConfig, TopNConfig
+from quantlab.base.portfolio import LabelSpec
+from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfRiskModel
+from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
+from quantlab.portfolio.predefined.top_n import TopNConstructor
+from tests.quantlab_run_fixture import build_constructor_run, build_quantlab_run
 
 PACKAGE = Path(__file__).resolve().parents[1] / "quantlab_trader"
 
@@ -77,15 +86,62 @@ def test_trader_source_imports_only_the_quantlab_allowlist():
     assert offending == {}
 
 
-def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path):
+def _weights_run(root):
     bars = pd.bdate_range("2024-01-02", periods=4)
-    quantlab_run = build_quantlab_run(
-        tmp_path / "quantlab",
+    return build_quantlab_run(
+        root,
         bars,
         {10001: [10.0, 10.0, 11.0, 11.0]},
         {10001: [10.0, 11.0, 11.0, 12.0]},
         {10001: [1.0, np.nan, 0.0, np.nan]},
     )
+
+
+def _constructor_run(root, rule, warmup):
+    bars = pd.bdate_range("2024-01-02", periods=warmup + 4)
+    permnos = (10001, 10002, 10003)
+    steps = np.arange(len(bars))
+    close = {p: list(10.0 * k + np.sin(steps * k)) for k, p in enumerate(permnos, 1)}
+    run_dir, _ = build_constructor_run(
+        root, bars, close, close,
+        {"ret_5": {p: [0.01 * k, -0.02 * k, 0.03, 0.01] for k, p in enumerate(permnos, 1)}},
+        rule, [LabelSpec("ret_5", "raw", 1, 5)], first_bar=warmup,
+    )
+    return run_dir
+
+
+#: Each replay: its loop and how its quantlab run is built. The closed-loop
+#: rule's module (and mean-variance's cvxpy) loads by class path.
+REPLAYS = {
+    "open": ("open", _weights_run),
+    "closed_topn": (
+        "closed",
+        lambda root: _constructor_run(
+            root, TopNConstructor(TopNConfig(direction="long_only", top_n=2)), 0
+        ),
+    ),
+    "closed_mean_variance": (
+        "closed",
+        lambda root: _constructor_run(
+            root,
+            MeanVarianceOptimizer(
+                MeanVarianceConfig(
+                    expected_return_label="ret_5",
+                    risk_model=LedoitWolfRiskModel(LedoitWolfConfig(lookback_bars=3)),
+                    risk_aversion=5.0,
+                    ic=0.05,
+                )
+            ),
+            4,
+        ),
+    ),
+}
+
+
+@pytest.mark.parametrize("replay", sorted(REPLAYS))
+def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path, replay):
+    loop, build = REPLAYS[replay]
+    quantlab_run = build(tmp_path / "quantlab")
     script = textwrap.dedent(
         f"""
         import json, sys
@@ -95,7 +151,7 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
 
         run_dir = run(TraderConfig(
             quantlab_run={str(quantlab_run)!r}, venue=BacktestVenueConfig(),
-            loop="open", output_dir={str(tmp_path / "trader")!r},
+            loop={loop!r}, output_dir={str(tmp_path / "trader")!r},
         ))
         loaded = [m for m in sys.modules if m.startswith({FORBIDDEN!r})]
         print(json.dumps({{"run_dir": str(run_dir), "loaded": loaded}}))
@@ -111,5 +167,8 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
     )
 
     report = json.loads(completed.stdout.strip().splitlines()[-1])
-    assert (Path(report["run_dir"]) / "orders.zarr").exists()
+    run_dir = Path(report["run_dir"])
+    assert (run_dir / "orders.zarr").exists()
+    with xr.open_zarr(run_dir / "decisions.zarr") as decisions:
+        assert decisions.sizes["timestamp"] > 0
     assert report["loaded"] == []

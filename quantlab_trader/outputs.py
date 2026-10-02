@@ -15,8 +15,10 @@
   the submitted one, rescaled across a split),
   ``filled_quantity``, ``fill_price`` (volume-weighted), ``fee`` and
   ``reason``;
-- ``events.json``: ``{"events": [...]}``, each with a ``type``: holds, rule
-  events, unfilled orders and corporate actions: venue fills (``side``,
+- ``events.json``: ``{"events": [...]}``, each with a ``type``: holds
+  (``hold``, the rule's ``failure``), the rule's events (``rule_event``,
+  its ``name`` and the ``symbols`` it names or the ``count`` it gives, as
+  quantlab's ``metrics.json`` records them), unfilled orders and corporate actions: venue fills (``side``,
   ``quantity``, ``price``, ``fee``; never in ``orders.zarr``), cash bookings
   and logged factor days (``quantity`` held, ``amount`` of cash).
 
@@ -71,13 +73,21 @@ class RunRecorder:
         self._equity[t] = result.equity
         if result.decision is None:
             return
-        self._decisions[t] = result.decision.weights
+        weights = result.decision.weights
+        self._decisions[t] = pd.Series(
+            weights.values, index=[_json_scalar(v) for v in weights["symbol"].values]
+        )
         if result.decision.failure is not None:
             self._events.append(
                 {"type": "hold", "timestamp": _day(t), "failure": result.decision.failure}
             )
-        for event in result.decision.events:
-            self._events.append({"type": "rule_event", "timestamp": _day(t), **event})
+        for name, value in result.decision.events.items():
+            event = {"type": "rule_event", "timestamp": _day(t), "name": name}
+            if isinstance(value, (int, np.integer)):
+                event["count"] = int(value)
+            else:
+                event["symbols"] = [_json_scalar(v) for v in value]
+            self._events.append(event)
         for order in result.orders:
             self._order_rows[(order.permno, order.decision_date)] = len(self._orders)
             self._orders.append(
