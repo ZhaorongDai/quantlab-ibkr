@@ -13,16 +13,14 @@ import dataclasses
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Literal, Self
-
-import pandas as pd
-import xarray as xr
+from typing import TYPE_CHECKING, Any, Self
 
 from quantlab.base.tracking import Tracker
 from quantlab.utils.module import get_cls_from_path
+from quantlab_trader.base.venue import Loop
 
 if TYPE_CHECKING:
-    from quantlab_trader.base.venue import Venue
+    from quantlab_trader.base.venue import ReplayRequest, Venue
     from quantlab_trader.quantlab_run import QuantlabRun
 
 
@@ -41,38 +39,16 @@ class VenueConfig(ABC):
     """
 
     @abstractmethod
-    def build(
-        self,
-        run: QuantlabRun,
-        *,
-        start: pd.Timestamp,
-        end: pd.Timestamp,
-        permnos: tuple,
-        loop: str,
-        predictions: xr.Dataset | None = None,
-        history_start: pd.Timestamp | None = None,
-    ) -> Venue:
-        """Return the venue that executes ``run`` from ``start`` to ``end``.
+    def build(self, run: QuantlabRun, request: ReplayRequest) -> Venue:
+        """Return the venue that executes ``run`` as ``request`` asks.
 
         Parameters
         ----------
         run : QuantlabRun
             The quantlab run being executed.
-        start, end : pandas.Timestamp
-            The replay window, both inclusive.
-        permnos : tuple
-            The securities the strategy can trade (quantlab's symbol labels).
-        loop : {"closed", "open"}
-            The replay's loop; a backtest venue picks its default fee model
-            from it (ADR 0003), a live venue ignores it.
-        predictions : xarray.Dataset, optional
-            Closed loop: the prediction panel over the window, whose rows the
-            decision source hands out and whose symbols the decision inputs
-            are on.
-        history_start : pandas.Timestamp, optional
-            Closed loop: where the decision-price history starts,
-            ``bar_before(anchor, lookback_bars)`` (ADR 0008); ``start`` when
-            omitted.
+        request : ReplayRequest
+            The window, the instruments, the loop and, closed loop, the
+            prediction panel and the start of the decision-price history.
         """
 
     def get_config(self) -> dict[str, Any]:
@@ -114,9 +90,10 @@ class TraderConfig:
         The quantlab run directory (its ``config.json``, ``weights.zarr``, ...).
     venue : VenueConfig
         The venue; ``BacktestVenueConfig`` in v1.
-    loop : {"closed", "open"}, default "closed"
+    loop : Loop or {"closed", "open"}, default Loop.CLOSED
         Closed-loop replay runs quantlab's constructor on the account's
-        holdings; open-loop replay executes the run's rebalance table.
+        holdings; open-loop replay executes the run's rebalance table. A
+        string is converted to its ``Loop``.
     start, end : str or None
         Narrow the run's window (inclusive); ``None`` keeps the run's.
     output_dir : str or None
@@ -138,7 +115,7 @@ class TraderConfig:
 
     quantlab_run: str
     venue: VenueConfig
-    loop: Literal["closed", "open"] = "closed"
+    loop: Loop = Loop.CLOSED
     start: str | None = None
     end: str | None = None
     output_dir: str | None = None
@@ -146,8 +123,13 @@ class TraderConfig:
     name: str | None = None
 
     def __post_init__(self):
-        if self.loop not in ("closed", "open"):
-            raise ValueError(f"TraderConfig.loop must be 'closed' or 'open', got {self.loop!r}")
+        try:
+            object.__setattr__(self, "loop", Loop(self.loop))
+        except ValueError:
+            raise ValueError(
+                f"TraderConfig.loop must be one of {[loop.value for loop in Loop]}, "
+                f"got {self.loop!r}"
+            ) from None
         if not isinstance(self.venue, VenueConfig):
             raise TypeError(
                 f"TraderConfig.venue must be a VenueConfig, got {type(self.venue).__name__}"
@@ -156,6 +138,7 @@ class TraderConfig:
     def get_config(self) -> dict[str, Any]:
         """Return the config as JSON values; the venue and tracker carry their ``"name"``."""
         fields = {f.name: getattr(self, f.name) for f in dataclasses.fields(self)}
+        fields["loop"] = self.loop.value
         fields["venue"] = self.venue.get_config()
         fields["tracker"] = None if self.tracker is None else self.tracker.get_config()
         return fields

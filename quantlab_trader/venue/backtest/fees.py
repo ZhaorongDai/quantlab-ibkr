@@ -42,22 +42,17 @@ class FractionFeeModel(FeeModel):
     ----------
     rate : float
         The fraction of ``fill_qty * fill_px`` charged.
+
+    Attributes
+    ----------
+    minimum_fee_orders : set of str
+        Always empty: a fraction of the notional has no minimum.
     """
 
     def __init__(self, rate: float):
         super().__init__()
         self.rate = float(rate)
-
-    @staticmethod
-    def minimum_applies(quantity, price) -> bool:
-        """Return ``False``: a fraction of the notional has no minimum.
-
-        Examples
-        --------
-        >>> FractionFeeModel.minimum_applies(1, 1.0)
-        False
-        """
-        return False
+        self.minimum_fee_orders: set[str] = set()
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:
         """Return ``rate * fill_qty * fill_px`` in the instrument's quote currency."""
@@ -78,6 +73,12 @@ class IbkrFixedFeeModel(FeeModel):
     charged as one order (the backtest fills an order whole).
     Corporate-action and expiration venue fills are free (``is_fee_free``).
 
+    Attributes
+    ----------
+    minimum_fee_orders : set of str
+        Client order ids of the fills charged the USD 1.00 minimum
+        (``minimum_applies``), recorded as they are charged.
+
     Examples
     --------
     >>> IbkrFixedFeeModel.charge(OrderSide.BUY, 100, Decimal("10.5105"))
@@ -90,6 +91,10 @@ class IbkrFixedFeeModel(FeeModel):
     MINIMUM = Decimal("1.00")
     MAXIMUM_RATE = Decimal("0.01")
     SEC_FEE_RATE = Decimal("0.0000206")
+
+    def __init__(self):
+        super().__init__()
+        self.minimum_fee_orders: set[str] = set()
 
     @classmethod
     def charge(cls, side: OrderSide, quantity: Decimal | int, price: Decimal) -> Decimal:
@@ -119,8 +124,14 @@ class IbkrFixedFeeModel(FeeModel):
         return cls.PER_SHARE * Decimal(quantity) < cls.MINIMUM <= cls.MAXIMUM_RATE * value
 
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:
-        """Return the IBKR Pro Fixed fee of the fill in the instrument's quote currency."""
+        """Return the IBKR Pro Fixed fee of the fill in the instrument's quote currency.
+
+        A fill charged the minimum adds its order to ``minimum_fee_orders``.
+        """
         if is_fee_free(order):
             return Money(0, instrument.quote_currency)
-        fee = self.charge(order.side, fill_qty.as_decimal(), fill_px.as_decimal())
+        quantity, price = fill_qty.as_decimal(), fill_px.as_decimal()
+        if self.minimum_applies(quantity, price):
+            self.minimum_fee_orders.add(order.client_order_id.value)
+        fee = self.charge(order.side, quantity, price)
         return Money(fee, instrument.quote_currency)

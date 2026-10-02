@@ -15,7 +15,6 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any, Literal, Self
 
 import pandas as pd
-import xarray as xr
 from nautilus_trader.backtest.engine import BacktestEngine, BacktestEngineConfig
 from nautilus_trader.backtest.models import FeeModel
 from nautilus_trader.config import LoggingConfig, RiskEngineConfig
@@ -24,7 +23,7 @@ from nautilus_trader.model.enums import AccountType, OmsType
 from nautilus_trader.model.objects import Money
 
 from quantlab_trader.base.config import VenueConfig
-from quantlab_trader.base.venue import Venue
+from quantlab_trader.base.venue import Loop, ReplayRequest, Venue, VenueReport
 from quantlab_trader.quantlab_run import QuantlabRun
 from quantlab_trader.venue.backtest.clock import BacktestDecisionClock
 from quantlab_trader.venue.backtest.corporate_actions import (
@@ -66,7 +65,7 @@ _FEE_MODELS: dict[str, Callable[[QuantlabRun], FeeModel]] = {
 #: The fee model each loop takes when ``ExecutionConfig.fee_model`` is None
 #: (#13, spec #18 stories 22-23): closed loop costs what the IBKR account
 #: will, open loop what the quantlab run charged.
-_DEFAULT_FEE_MODEL = {"closed": "ibkr_fixed", "open": "fraction"}
+_DEFAULT_FEE_MODEL = {Loop.CLOSED: "ibkr_fixed", Loop.OPEN: "fraction"}
 
 
 @dataclass(frozen=True)
@@ -151,21 +150,27 @@ class BacktestVenueConfig(VenueConfig):
             fields = {**fields, "execution": ExecutionConfig.from_config(execution)}
         return cls(**fields)
 
-    def build(
-        self,
-        run: QuantlabRun,
-        *,
-        start: pd.Timestamp,
-        end: pd.Timestamp,
-        permnos: tuple,
-        loop: str,
-        predictions: xr.Dataset | None = None,
-        history_start: pd.Timestamp | None = None,
-    ) -> BacktestVenue:
-        """Return the backtest venue replaying ``run`` from ``start`` to ``end``."""
+    def build(self, run: QuantlabRun, request: ReplayRequest) -> BacktestVenue:
+        """Return the backtest venue executing ``request``, its execution settings resolved.
+
+        An unset fee model is the loop's default (closed loop: ``"ibkr_fixed"``,
+        open loop: ``"fraction"``); unset slippage and starting cash are the
+        run's.
+
+        Raises
+        ------
+        ValueError
+            For a run whose own slippage lies outside ``[0, 1)``.
+        """
+        execution = self.execution
+        fee_model = _FEE_MODELS[execution.fee_model or _DEFAULT_FEE_MODEL[request.loop]](run)
+        slippage = run.slippage if execution.slippage is None else execution.slippage
         return BacktestVenue(
-            run, self.execution, start=start, end=end, permnos=permnos, loop=loop,
-            predictions=predictions, history_start=history_start,
+            run,
+            request,
+            fee_model=fee_model,
+            fill_model=FractionSlippageFillModel(slippage),
+            init_cash=run.init_cash if execution.init_cash is None else execution.init_cash,
         )
 
 
@@ -176,58 +181,44 @@ class BacktestVenue(Venue):
     ----------
     run : QuantlabRun
         The run replayed.
-    execution : ExecutionConfig
-        Fees, slippage and starting cash.
-    start, end : pandas.Timestamp
-        The window, inclusive.
-    permnos : tuple
-        The securities to create instruments for.
-    loop : {"open", "closed"}
-        The replay's loop, which picks the default fee model.
-    predictions : xarray.Dataset, optional
-        Closed loop: the window's prediction panel, for the decision source.
-    history_start : pandas.Timestamp, optional
-        Closed loop: the first bar of the decision-price history.
+    request : ReplayRequest
+        The window, the securities to create instruments for and, closed
+        loop, the prediction panel and history start for the decision source.
+    fee_model : FractionFeeModel or IbkrFixedFeeModel
+        The fee model; it records the fills it charges its minimum.
+    fill_model : FractionSlippageFillModel
+        The slippage.
+    init_cash : float
+        The starting cash.
 
     Attributes
     ----------
-    fee_model : FractionFeeModel or IbkrFixedFeeModel
-        The resolved fee model.
-    fill_model : FractionSlippageFillModel
-        The resolved slippage.
-    init_cash : float
-        The resolved starting cash.
-
-    Raises
-    ------
-    ValueError
-        For an unknown ``loop``, or a run whose own slippage lies outside
-        ``[0, 1)``.
+    fee_model, fill_model, init_cash
+        As given.
     """
 
     def __init__(
         self,
         run: QuantlabRun,
-        execution: ExecutionConfig,
+        request: ReplayRequest,
         *,
-        start: pd.Timestamp,
-        end: pd.Timestamp,
-        permnos: tuple,
-        loop: str,
-        predictions: xr.Dataset | None = None,
-        history_start: pd.Timestamp | None = None,
+        fee_model: FractionFeeModel | IbkrFixedFeeModel,
+        fill_model: FractionSlippageFillModel,
+        init_cash: float,
     ):
-        if loop not in _DEFAULT_FEE_MODEL:
-            raise ValueError(f"BacktestVenue: loop must be 'closed' or 'open', got {loop!r}")
-        self.fee_model = _FEE_MODELS[execution.fee_model or _DEFAULT_FEE_MODEL[loop]](run)
-        slippage = run.slippage if execution.slippage is None else execution.slippage
-        self.fill_model = FractionSlippageFillModel(slippage)
-        self.init_cash = run.init_cash if execution.init_cash is None else execution.init_cash
+        self.fee_model = fee_model
+        self.fill_model = fill_model
+        self.init_cash = init_cash
         self.source = BacktestDecisionSource(
-            run, start, end, permnos, predictions=predictions, history_start=history_start
+            run,
+            request.start,
+            request.end,
+            request.permnos,
+            predictions=request.predictions,
+            history_start=request.history_start,
         )
         calendar = self.source.calendar()
-        self.resolver = BacktestResolver(permnos, calendar[0])
+        self.resolver = BacktestResolver(request.permnos, calendar[0])
         self.corporate_actions = corporate_action_days(self.source.prices)
         self.submitter = BacktestOpenSubmitter(
             calendar,
@@ -236,12 +227,14 @@ class BacktestVenue(Venue):
         )
         self.clock = BacktestDecisionClock(calendar)
 
-    def is_minimum_fee(self, quantity: int, price: float) -> bool:
-        """Return whether the fee model charges a fill of ``quantity`` at ``price`` its minimum."""
-        return self.fee_model.minimum_applies(quantity, price)
+    def run(self, strategy: PortfolioStrategy) -> VenueReport:
+        """Build the engine, run the window through ``strategy`` and dispose of it.
 
-    def run(self, strategy: PortfolioStrategy) -> None:
-        """Build the engine, run the window through ``strategy`` and dispose of it."""
+        Returns
+        -------
+        VenueReport
+            The fills the fee model charged its minimum.
+        """
         engine = BacktestEngine(
             BacktestEngineConfig(
                 logging=LoggingConfig(log_level="ERROR"),
@@ -281,3 +274,4 @@ class BacktestVenue(Venue):
             )
         finally:
             engine.dispose()
+        return VenueReport(minimum_fee_orders=frozenset(self.fee_model.minimum_fee_orders))

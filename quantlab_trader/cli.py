@@ -23,6 +23,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from quantlab_trader.base.config import TraderConfig
+from quantlab_trader.base.venue import Loop
 from quantlab_trader.runner import run
 from quantlab_trader.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
 
@@ -35,7 +36,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     backtest.add_argument("config", nargs="?", help="a TraderConfig JSON file")
     backtest.add_argument("--quantlab-run", help="a quantlab run directory")
-    backtest.add_argument("--loop", choices=("closed", "open"), default=None)
+    backtest.add_argument("--loop", choices=[loop.value for loop in Loop], default=None)
     backtest.add_argument("--start", default=None)
     backtest.add_argument("--end", default=None)
     backtest.add_argument("--output-dir", default=None)
@@ -72,7 +73,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         config = TraderConfig(
             quantlab_run=args.quantlab_run,
             venue=BacktestVenueConfig(),
-            loop=args.loop or "closed",
+            loop=Loop(args.loop) if args.loop else Loop.CLOSED,
             start=args.start,
             end=args.end,
             output_dir=args.output_dir,

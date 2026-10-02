@@ -42,6 +42,7 @@ import pytest
 import xarray as xr
 
 from quantlab_trader.base.config import TraderConfig
+from quantlab_trader.base.venue import Loop, ReplayRequest
 from quantlab_trader.runner import run
 from quantlab_trader.venue.backtest.fees import FractionFeeModel, IbkrFixedFeeModel
 from quantlab_trader.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
@@ -110,6 +111,16 @@ def test_ibkr_fixed_charges_the_minimum_the_cap_and_the_sec_fee_on_slipped_fills
     )
 
 
+def test_the_fills_the_ibkr_minimum_sets_are_counted_in_the_run_metrics(ibkr_replay):
+    # 100 shares of 10001 cost 0.50 per share, raised to the 1.00 minimum, on
+    # the buy and on the sale (plus its SEC fee); the other four fills are
+    # capped or above the minimum.
+    _, run_dir = ibkr_replay
+    metrics = json.loads((run_dir / "metrics.json").read_text())
+
+    assert metrics["execution"]["trader"]["minimum_fee_hits"] == 2
+
+
 def test_equity_carries_the_slipped_fills_and_the_ibkr_fees(ibkr_replay):
     _, run_dir = ibkr_replay
     equity = xr.open_zarr(run_dir / "equity.zarr").load()["value"].values
@@ -170,7 +181,7 @@ def test_each_loop_resolves_its_default_execution(
     from quantlab_trader.quantlab_run import QuantlabRun
 
     venue = BacktestVenueConfig(execution).build(
-        QuantlabRun.load(quantlab_run), start=BARS[0], end=BARS[-1], permnos=(10001,), loop=loop
+        QuantlabRun.load(quantlab_run), ReplayRequest(BARS[0], BARS[-1], (10001,), Loop(loop))
     )
 
     assert type(venue.fee_model) is fee_model
@@ -181,7 +192,7 @@ def test_the_open_loop_default_fee_is_the_runs_fraction(quantlab_run):
     from quantlab_trader.quantlab_run import QuantlabRun
 
     venue = BacktestVenueConfig().build(
-        QuantlabRun.load(quantlab_run), start=BARS[0], end=BARS[-1], permnos=(10001,), loop="open"
+        QuantlabRun.load(quantlab_run), ReplayRequest(BARS[0], BARS[-1], (10001,), Loop.OPEN)
     )
 
     assert venue.fee_model.rate == 0.001

@@ -70,6 +70,7 @@ from quantlab.utils import backtest_stats
 from quantlab.utils.module import load_backtester_from_config
 from quantlab_trader import runner
 from quantlab_trader.base.config import TraderConfig
+from quantlab_trader.base.venue import Loop
 from quantlab_trader.metrics import UNFILLED_STATUSES
 from quantlab_trader.quantlab_run import QuantlabRun
 from quantlab_trader.venue.backtest.corporate_actions import (
@@ -246,7 +247,7 @@ def _ladder_end(run, table, market, rungs, execution, partial: Path, parity_dir:
     The trader runs are written under ``partial/trader`` and recorded at
     their final place under ``parity_dir``.
     """
-    trader_dir = _trader_run(run, execution, "open", partial / "trader")
+    trader_dir = _trader_run(run, execution, Loop.OPEN, partial / "trader")
     rungs["T"] = _trader_rung(trader_dir, market, execution)
     with xr.open_zarr(run.run_dir / "equity.zarr") as recorded:
         run_value = recorded["value"].load()
@@ -265,7 +266,7 @@ def _ladder_end(run, table, market, rungs, execution, partial: Path, parity_dir:
     }
     closed = closed_vs_open = None
     if (run.run_dir / PredictionPanel.FILE_NAME).exists():
-        closed_dir = _trader_run(run, execution, "closed", partial / "trader")
+        closed_dir = _trader_run(run, execution, Loop.CLOSED, partial / "trader")
         inputs["closed_loop_run"] = str(parity_dir / "trader" / closed_dir.name)
         closed = _trader_rung(closed_dir, market, execution, name="closed")
         closed_vs_open = _closed_vs_open(run, table, market, rungs, closed, closed_dir, statistics)
@@ -1094,7 +1095,7 @@ def _delta(value, above):
     return value - above
 
 
-def _trader_run(run: QuantlabRun, execution: ExecutionConfig, loop: str, output_dir: Path) -> Path:
+def _trader_run(run: QuantlabRun, execution: ExecutionConfig, loop: Loop, output_dir: Path) -> Path:
     """Replay the run with trader's ``runner.run``, untracked, under ``execution``."""
     return runner.run(
         TraderConfig(

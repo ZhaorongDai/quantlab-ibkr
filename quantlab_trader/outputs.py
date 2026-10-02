@@ -44,7 +44,7 @@ import xarray as xr
 from quantlab.utils import backtest_stats
 from quantlab.utils.backtest_report import write_backtest_report
 from quantlab_trader.base.config import TraderConfig
-from quantlab_trader.base.venue import MARKET_TZ, NextOpenOrder
+from quantlab_trader.base.venue import MARKET_TZ, Loop, NextOpenOrder, VenueReport
 from quantlab_trader.decision import CycleResult
 from quantlab_trader.metrics import CycleRecord, bar_label, run_metrics, window_benchmark
 from quantlab_trader.quantlab_run import QuantlabRun
@@ -87,7 +87,7 @@ class RunRecorder:
         self.init_cash = float(init_cash)
         name = config.name or run.run_dir.name
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-        self.run_name = f"{name}_{config.loop}_{stamp}"
+        self.run_name = f"{name}_{config.loop.value}_{stamp}"
         self.metrics: dict | None = None
         self._cycles: list[CycleRecord] = []
         self._fills: list[dict] = []
@@ -173,7 +173,6 @@ class RunRecorder:
         price: float,
         quantity: int,
         fee: float,
-        minimum_fee: bool,
     ) -> None:
         """Add one fill to its order; fills of other orders are ignored.
 
@@ -185,8 +184,6 @@ class RunRecorder:
             The fill's UNIX nanoseconds; its bar is the market-time-zone date.
         price, quantity, fee
             The fill.
-        minimum_fee : bool
-            Whether the venue charged its minimum commission on it.
         """
         row = self._client_rows.get(client_order_id)
         if row is None:
@@ -200,7 +197,6 @@ class RunRecorder:
                 size=quantity if record["side"] == "BUY" else -quantity,
                 price=price,
                 fee=fee,
-                minimum_fee=bool(minimum_fee),
             )
         )
         record["filled"] += quantity
@@ -314,8 +310,15 @@ class RunRecorder:
             reason = f"{earlier}; {reason}" if earlier else reason
             self._orders[row].update(status=status, reason=reason)
 
-    def write(self) -> Path:
-        """Write the run directory and return its path."""
+    def write(self, report: VenueReport) -> Path:
+        """Write the run directory and return its path.
+
+        Parameters
+        ----------
+        report : VenueReport
+            What the venue reported about the run's execution: which fills
+            it charged its minimum commission.
+        """
         output_dir = Path(self.config.output_dir or self.run.run_dir.parent)
         run_dir = output_dir / self.run_name
         partial = output_dir / f".{run_dir.name}.partial"
@@ -329,7 +332,7 @@ class RunRecorder:
             equity.to_zarr(partial / "equity.zarr", mode="w")
             orders.to_zarr(partial / "orders.zarr", mode="w")
             (partial / "events.json").write_text(json.dumps({"events": self._events}, indent=2))
-            self._write_metrics_and_report(partial, decisions, equity, orders)
+            self._write_metrics_and_report(partial, decisions, equity, orders, report)
             partial.rename(run_dir)
         except BaseException:
             shutil.rmtree(partial, ignore_errors=True)
@@ -337,7 +340,12 @@ class RunRecorder:
         return run_dir
 
     def _write_metrics_and_report(
-        self, directory: Path, decisions: xr.Dataset, equity: xr.Dataset, orders: xr.Dataset
+        self,
+        directory: Path,
+        decisions: xr.Dataset,
+        equity: xr.Dataset,
+        orders: xr.Dataset,
+        report: VenueReport,
     ) -> None:
         """Compute the metrics, then write ``metrics.json`` and ``report.html``."""
         run = self.run
@@ -359,7 +367,7 @@ class RunRecorder:
         )
         closes.columns = [_json_scalar(v) for v in closes.columns]
         benchmark = run.benchmark()
-        fills = self._fills_dataset()
+        fills = self._fills_dataset(report)
         self.metrics = run_metrics(
             equity=equity,
             fills=fills,
@@ -375,7 +383,7 @@ class RunRecorder:
             rebalance_periods=run.rebalance_periods,
             split=run.split(),
             benchmark=benchmark,
-            closed_loop=self.config.loop == "closed",
+            closed_loop=self.config.loop is Loop.CLOSED,
             notes=NOTES,
         )
         (directory / "metrics.json").write_text(
@@ -398,7 +406,7 @@ class RunRecorder:
             title=self.run_name,
             summary={
                 "Quantlab run": str(run.run_dir),
-                "Loop": f"{self.config.loop} loop",
+                "Loop": f"{self.config.loop.value} loop",
                 "Bar interval": str(bar_interval),
                 "Rebalance every": f"{run.rebalance_periods} bars",
                 "Execution": ", ".join(f"{k}={v}" for k, v in execution.items()) or "-",
@@ -424,9 +432,18 @@ class RunRecorder:
             **report_benchmark,
         )
 
-    def _fills_dataset(self) -> xr.Dataset:
-        """The fills of next-open orders on ``fill``, as ``run_metrics`` reads them."""
+    def _fills_dataset(self, report: VenueReport) -> xr.Dataset:
+        """The fills of next-open orders on ``fill``, as ``run_metrics`` reads them.
+
+        ``minimum_fee`` marks the fills of the orders ``report`` lists as
+        charged the venue's minimum commission.
+        """
         rows = self._fills
+        minimum = {
+            self._client_rows[client_id]
+            for client_id in report.minimum_fee_orders
+            if client_id in self._client_rows
+        }
         return xr.Dataset(
             {
                 "order": ("fill", np.array([r["order"] for r in rows], dtype=np.int64)),
@@ -435,7 +452,7 @@ class RunRecorder:
                 "size": ("fill", np.array([r["size"] for r in rows], dtype=np.int64)),
                 "price": ("fill", np.array([r["price"] for r in rows], dtype=float)),
                 "fee": ("fill", np.array([r["fee"] for r in rows], dtype=float)),
-                "minimum_fee": ("fill", np.array([r["minimum_fee"] for r in rows], dtype=bool)),
+                "minimum_fee": ("fill", np.array([r["order"] in minimum for r in rows], dtype=bool)),
             }
         )
 

@@ -19,6 +19,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Sequence
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import TYPE_CHECKING, Literal
 
 import pandas as pd
@@ -61,6 +62,87 @@ def corporate_action_kind(tags) -> str | None:
         if tag.startswith(prefix):
             return tag[len(prefix):]
     return None
+
+
+class Loop(StrEnum):
+    """A replay's loop: where a decision cycle's target weights come from.
+
+    ``CLOSED`` runs quantlab's constructor on the account's holdings (the
+    same loop as live trading); ``OPEN`` executes the quantlab run's
+    rebalance table as it is. Its value is its JSON form.
+
+    Examples
+    --------
+    >>> Loop("open") is Loop.OPEN, f"{Loop.CLOSED} loop"
+    (True, 'closed loop')
+    """
+
+    CLOSED = "closed"
+    OPEN = "open"
+
+
+@dataclass(frozen=True, eq=False)
+class ReplayRequest:
+    """What a venue is asked to execute: the window, the instruments and the loop.
+
+    ``VenueConfig.build`` takes one; a venue reads what it needs and ignores
+    the rest (a live venue has no prediction panel to replay). Compared by
+    identity, as it carries a prediction panel.
+
+    Attributes
+    ----------
+    start, end : pandas.Timestamp
+        The window, both inclusive.
+    permnos : tuple
+        The securities the strategy can trade (quantlab's symbol labels).
+    loop : Loop
+        The replay's loop; the backtest venue picks its default fee model
+        from it (ADR 0003).
+    predictions : xarray.Dataset or None
+        Closed loop: the prediction panel over the window, whose rows the
+        decision source hands out and whose symbols the decision inputs are
+        on; ``None`` in open loop.
+    history_start : pandas.Timestamp or None
+        Closed loop: where the decision-price history starts,
+        ``bar_before(anchor, lookback_bars)`` (ADR 0008); ``None`` means
+        ``start``.
+
+    Examples
+    --------
+    >>> request = ReplayRequest(
+    ...     pd.Timestamp("2024-01-02"), pd.Timestamp("2024-01-05"), (10001,), Loop.OPEN
+    ... )
+    >>> request.loop, request.predictions
+    (<Loop.OPEN: 'open'>, None)
+    """
+
+    start: pd.Timestamp
+    end: pd.Timestamp
+    permnos: tuple
+    loop: Loop
+    predictions: xr.Dataset | None = None
+    history_start: pd.Timestamp | None = None
+
+
+@dataclass(frozen=True)
+class VenueReport:
+    """What only the venue knows about a finished run's execution.
+
+    Attributes
+    ----------
+    minimum_fee_orders : frozenset of str
+        Client order ids of the fills charged the venue's minimum
+        commission, counted in a trader run's
+        ``execution.trader.minimum_fee_hits``; empty for a venue without a
+        minimum.
+
+    Examples
+    --------
+    >>> VenueReport().minimum_fee_orders
+    frozenset()
+    """
+
+    minimum_fee_orders: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -192,6 +274,10 @@ class DecisionClock(ABC):
 class Venue(ABC):
     """The four parts that differ between backtest and live, and the run loop.
 
+    Fees, fills, the feed and corporate actions are not on this interface
+    (ADR 0008): what the run's outputs need from them comes back from
+    ``run`` as a ``VenueReport``.
+
     Attributes
     ----------
     resolver : InstrumentResolver
@@ -199,8 +285,10 @@ class Venue(ABC):
     source : DecisionSource
     clock : DecisionClock
     init_cash : float
-        The account's starting cash, the base of the first bar's return (the
-        simulated deposit in a backtest; the account's cash at start live).
+        The account's starting cash, the base of the first bar's return and
+        the run's Start Value: the simulated deposit in a backtest, the
+        account's cash when the node starts live. Not a part: the run
+        directory needs it, the strategy never reads it.
     """
 
     init_cash: float
@@ -210,14 +298,11 @@ class Venue(ABC):
     clock: DecisionClock
 
     @abstractmethod
-    def run(self, strategy: PortfolioStrategy) -> None:
-        """Build and run the engine (backtest) or node (live) around ``strategy``."""
+    def run(self, strategy: PortfolioStrategy) -> VenueReport:
+        """Build and run the engine (backtest) or node (live) around ``strategy``.
 
-    def is_minimum_fee(self, quantity: int, price: float) -> bool:
-        """Return whether a fill of ``quantity`` shares at ``price`` paid the minimum commission.
-
-        Counted in a trader run's ``execution.trader.minimum_fee_hits``. The
-        default (a venue without a minimum) is ``False``; the backtest venue
-        asks its fee model, a live venue the broker's schedule.
+        Returns
+        -------
+        VenueReport
+            What the venue alone knows about the run's execution.
         """
-        return False
