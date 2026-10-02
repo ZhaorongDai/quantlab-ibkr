@@ -510,3 +510,27 @@ def test_l5_cash_is_trader_cash_to_the_float(case, request):
     _, (report, data) = request.getfixturevalue(case)
 
     np.testing.assert_allclose(_equity(data, "T"), _equity(data, "L5"), rtol=0, atol=1e-6)
+
+
+def test_l5_opens_a_position_at_its_fill_price_as_nautilus_does(tmp_path):
+    # nautilus opens a position at the fill price itself; computed as
+    # px * q / q it can be an ulp off, and on a realized PnL at exactly half
+    # a cent (4-decimal prices, odd quantities) that ulp moves the cent.
+    # This market (seed 0) hit such a tie on its fourth bar.
+    rng = np.random.default_rng(0)
+    n, permnos = 80, range(10001, 10031)
+    bars = pd.bdate_range("2024-01-02", periods=n)
+    open_, close, weights = {}, {}, {}
+    for k, p in enumerate(permnos):
+        path = (5 + 7 * k) * np.exp(np.cumsum(rng.normal(0, 0.03, n)))
+        close[p] = list(np.round(path, 4))
+        open_[p] = list(np.round(path * (1 + rng.normal(0, 0.01, n)), 4))
+        weights[p] = list(np.where(np.arange(n) % 2 == 0, rng.uniform(0, 0.033, n), NAN))
+    run_dir = build_quantlab_run(
+        tmp_path / "quantlab", bars, open_, close, weights,
+        init_cash=100_003.0, fees=0.0005, slippage=0.0005,
+    )
+    report, data = _report(parity(run_dir, output_dir=tmp_path / "parity"))
+
+    np.testing.assert_allclose(_equity(data, "T"), _equity(data, "L5"), rtol=0, atol=1e-6)
+    assert report["checks"]["T_equals_L5"]["passed"]

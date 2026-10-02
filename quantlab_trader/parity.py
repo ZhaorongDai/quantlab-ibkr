@@ -803,7 +803,9 @@ class _NautilusMoney:
     reduces a position, the realized PnL ``closed_qty * (fill px -
     avg_px_open)`` (the reverse for a short) as ``Money``, rounded to the
     cent; a fill that adds to a position moves its average open price
-    instead, ``(avg * qty + px * fill_qty) / (qty + fill_qty)``. Cash credits
+    instead, ``(avg * qty + px * fill_qty) / (qty + fill_qty)``, and one that
+    opens a position (or the rest of one that flips it) sets it to the fill
+    price. Cash credits
     (dividends, cash in lieu, distributions) are cents. Kept this way, L5's
     equity is trader's to float precision, so a whole-share target on a
     truncation boundary is cut the same way in both; an exact-notional cash
@@ -829,9 +831,12 @@ class _NautilusMoney:
                 self.avg[j] = price
             elif qty == abs(held):
                 self.avg[j] = 0.0
-        else:
+        elif held:
             start = abs(held)
             self.avg[j] = (self.avg[j] * start + price * qty) / (start + qty)
+        else:
+            # A new position opens at the fill price itself, not px * q / q.
+            self.avg[j] = price
         self.credit(-fee)
 
     def cash(self, position: np.ndarray) -> float:
