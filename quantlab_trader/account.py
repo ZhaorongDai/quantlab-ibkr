@@ -26,7 +26,9 @@ def holdings(cache, resolver: InstrumentResolver) -> dict[Hashable, int]:
     """
     held: dict[Hashable, int] = {}
     for position in cache.positions_open():
-        quantity = int(round(position.signed_qty))
+        # Read from the decimal, as on_order_filled reads fills: the float
+        # signed_qty is inexact for many share counts.
+        quantity = int(position.signed_decimal_qty())
         if quantity:
             permno = resolver.permno(position.instrument_id)
             held[permno] = held.get(permno, 0) + quantity
