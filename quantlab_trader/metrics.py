@@ -56,6 +56,7 @@ from __future__ import annotations
 
 from collections.abc import Hashable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -212,7 +213,7 @@ def run_metrics(
         executed.fills, executed.close, cash_flows=executed.cash_flows
     )
     cash = xr.DataArray(
-        [c.equity * (1.0 - float(c.current_weights.sum())) for c in cycles],
+        _cash(cycles),
         dims="timestamp",
         coords={"timestamp": [c.timestamp for c in cycles]},
     ).reindex(timestamp=calendar)
@@ -574,7 +575,7 @@ def _trader_facts(fills: xr.Dataset, events: Sequence[Mapping], cycles: Sequence
             block["share_change"] += sign * int(event["quantity"])
         elif action == "MISMATCH":
             facts["mismatches"]["count"] += 1
-    cash = [c.equity * (1.0 - float(c.current_weights.sum())) for c in cycles]
+    cash = _cash(cycles)
     facts["peak_cash_debit"] = max(0.0, -min(cash)) if cash else 0.0
     return facts
 
@@ -608,16 +609,29 @@ class _Executed:
     cash_flows: xr.Dataset
 
 
+class _Change(NamedTuple):
+    """One change of a holding, in raw shares."""
+
+    bar: pd.Timestamp
+    #: 0 for a corporate action (09:30), 1 for a next-open fill after it.
+    stage: int
+    permno: Hashable
+    #: ``"fill"`` (a next-open fill or a delisting settlement) or ``"split"``.
+    kind: str
+    size: int
+    price: float
+    fee: float
+
+
 def _executions(fills: xr.Dataset, events: Sequence[Mapping], closes: pd.DataFrame) -> _Executed:
     """Restate the fills, cash flows and closes split-adjusted (module docstring).
 
     ``closes`` are the raw closes on the run's bars by PERMNO. Symbols become
-    strings, as ``backtest_stats.round_trips`` labels them.
+    strings, as ``backtest_stats.round_trips`` labels them. Changes of one
+    bar are taken corporate actions first, each stage in the order recorded.
     """
-    # (bar, order within the bar, PERMNO, kind, signed shares, price, fee):
-    # corporate actions act at 09:30, before the bar's next-open fills.
-    changes: list[tuple] = [
-        (
+    changes = [
+        _Change(
             pd.Timestamp(fills["timestamp"].values[row]),
             1,
             python_scalar(fills["symbol"].values[row]),
@@ -628,50 +642,65 @@ def _executions(fills: xr.Dataset, events: Sequence[Mapping], closes: pd.DataFra
         )
         for row in range(fills.sizes.get("fill", 0))
     ]
-    close = closes.astype(float)
-    flows: list[tuple] = []
+    flows: list[tuple[pd.Timestamp, str, float]] = []
+    settlements: list[tuple[pd.Timestamp, Hashable, float]] = []
     for event in events:
         if event.get("type") != "corporate_action":
             continue
         action, when, permno = event["action"], pd.Timestamp(event["timestamp"]), event["symbol"]
         if action in ("SPLIT", "IMPLIED_SPLIT", "DELIST"):
             sign = 1 if event["side"] == "BUY" else -1
-            kind = "fill" if action == "DELIST" else "split"
             changes.append(
-                (when, 0, permno, kind, sign * int(event["quantity"]), float(event["price"]), float(event["fee"]))
+                _Change(
+                    when, 0, permno, "fill" if action == "DELIST" else "split",
+                    sign * int(event["quantity"]), float(event["price"]), float(event["fee"]),
+                )
             )
             if action == "DELIST":
-                position = close.index.searchsorted(when)
-                if position:  # marked at its last valuation on the delisting bar
-                    close.loc[close.index[position - 1], permno] = float(event["price"])
+                settlements.append((when, permno, float(event["price"])))
         elif action in CASH_ACTIONS and event["amount"]:
             flows.append((when, str(permno), float(event["amount"])))
-    changes.sort(key=lambda change: change[:2])
+    changes.sort(key=lambda change: (change.bar, change.stage))
+
+    permnos = list(closes.columns) + sorted(
+        {c.permno for c in changes} - set(closes.columns), key=str
+    )
+    close = closes.reindex(columns=permnos).astype(float)
+    for when, permno, price in settlements:
+        # The bar before the settlement bar is the delisting bar, on which
+        # the equity marks the holding at its settlement price.
+        position = close.index.searchsorted(when)
+        if position:
+            close.loc[close.index[position - 1], permno] = price
 
     factors = pd.DataFrame(1.0, index=close.index, columns=close.columns)
     held: dict[Hashable, int] = {}
-    rows: list[tuple] = []
-    for when, _, permno, kind, size, price, fee in changes:
-        before = held.get(permno, 0)
-        held[permno] = before + size
-        factor = float(factors.at[when, permno]) if permno in factors else 1.0
-        if kind == "fill":
-            rows.append((when, str(permno), size / factor, price * factor, fee))
-        elif held[permno] == 0:
+    rows: list[tuple[pd.Timestamp, str, float, float, float]] = []
+    for change in changes:
+        before = held.get(change.permno, 0)
+        after = held[change.permno] = before + change.size
+        factor = float(factors.at[change.bar, change.permno])
+        if change.kind == "fill":
+            rows.append(
+                (change.bar, str(change.permno), change.size / factor, change.price * factor, change.fee)
+            )
+        elif after == 0:
             # A reverse split that leaves no share: the trip ends here.
-            rows.append((when, str(permno), -before / factor, 0.0, 0.0))
-        else:
-            factors.loc[when:, permno] *= held[permno] / before
+            rows.append((change.bar, str(change.permno), -before / factor, 0.0, 0.0))
+        elif before:
+            factors.loc[change.bar:, change.permno] *= after / before
 
     adjusted = close * factors
+    timestamp, symbol, size, price, fee = (list(column) for column in zip(*rows)) if rows else ([],) * 5
+    flow_timestamp, flow_symbol, amount = (list(column) for column in zip(*flows)) if flows else ([],) * 3
     return _Executed(
         fills=xr.Dataset(
             {
-                "timestamp": ("fill", np.array([r[0] for r in rows], dtype="datetime64[ns]")),
-                "symbol": ("fill", np.array([r[1] for r in rows], dtype=str)),
-                "size": ("fill", np.array([r[2] for r in rows], dtype=float)),
-                "price": ("fill", np.array([r[3] for r in rows], dtype=float)),
-                "fees": ("fill", np.array([r[4] for r in rows], dtype=float)),
+                "timestamp": ("fill", np.array(timestamp, dtype="datetime64[ns]")),
+                "symbol": ("fill", np.array(symbol, dtype=str)),
+                "size": ("fill", np.array(size, dtype=float)),
+                "price": ("fill", np.array(price, dtype=float)),
+                "fees": ("fill", np.array(fee, dtype=float)),
             }
         ),
         close=xr.DataArray(
@@ -684,12 +713,17 @@ def _executions(fills: xr.Dataset, events: Sequence[Mapping], closes: pd.DataFra
         ),
         cash_flows=xr.Dataset(
             {
-                "timestamp": ("flow", np.array([f[0] for f in flows], dtype="datetime64[ns]")),
-                "symbol": ("flow", np.array([f[1] for f in flows], dtype=str)),
-                "amount": ("flow", np.array([f[2] for f in flows], dtype=float)),
+                "timestamp": ("flow", np.array(flow_timestamp, dtype="datetime64[ns]")),
+                "symbol": ("flow", np.array(flow_symbol, dtype=str)),
+                "amount": ("flow", np.array(amount, dtype=float)),
             }
         ),
     )
+
+
+def _cash(cycles: Sequence[CycleRecord]) -> list[float]:
+    """The cash at each cycle's close: equity less the holdings, short-sale proceeds included."""
+    return [c.equity * (1.0 - float(c.current_weights.sum())) for c in cycles]
 
 
 def _trade_counts(trips: xr.Dataset, ranges) -> dict:

@@ -291,8 +291,13 @@ class QuantlabRun:
         benchmark = self.config.get("benchmark_dataset")
         source = None
         if isinstance(benchmark, dict):
-            source = benchmark.get("zarr_file_path") or (
-                f"the {str(benchmark.get('name', 'dataset')).rsplit('.', 1)[-1]} held in memory"
+            # quantlab names the store a dataset read; one it held in memory
+            # is recorded reading inputs/ of the run directory, a relative path.
+            path = benchmark.get("zarr_file_path")
+            source = (
+                path
+                if path and Path(path).is_absolute()
+                else f"the {str(benchmark.get('name', 'dataset')).rsplit('.', 1)[-1]} held in memory"
             )
         return {
             "folds": folds,
