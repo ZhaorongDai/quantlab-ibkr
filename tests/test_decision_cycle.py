@@ -8,12 +8,14 @@ What is locked here (ADR 0003, ADR 0008):
 - sells come before buys;
 - a bar without targets (not a rebalance bar) yields no decision and no orders;
 - a target equal to the holding's current weight (a locked position) keeps it;
-- closed loop: ``ConstructorTargets`` decides rebalance bars through quantlab's
-  ``build_context`` + ``decide``, and a held security missing from the
-  prediction row joins the context unpredicted.
+- closed loop: ``ConstructorTargets`` decides the bars quantlab's
+  ``DecisionInputs.rebalances`` names through its ``context`` and the rule's
+  ``decide``, and a held security missing from the prediction row joins the
+  context unpredicted (tradable where the price dataset has a fill price).
 """
 
 import math
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -22,22 +24,21 @@ import xarray as xr
 
 from quantlab.base.config import TopNConfig
 from quantlab.base.portfolio import Decision, LabelSpec
+from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.portfolio.predefined.top_n import TopNConstructor
-from quantlab_trader.base.venue import DecisionInputs, NextOpenOrder
-from quantlab_trader.calendar import RebalanceCalendar
+from quantlab_trader.base.venue import BarInputs, NextOpenOrder
 from quantlab_trader.decision import ConstructorTargets, DecisionCycle, TableTargets
+from tests.quantlab_run_fixture import _crsp_dataset
 
 T = pd.Timestamp("2024-01-03")
 
 
-def _inputs(close: dict, t=T) -> DecisionInputs:
+def _inputs(close: dict, t=T) -> BarInputs:
     close = pd.Series(close, dtype=float)
-    return DecisionInputs(
+    return BarInputs(
         timestamp=t,
         predictions=None,
-        tradable=close.notna(),
         close=close,
-        decision_prices=None,
         delisted=pd.Series(False, index=close.index),
     )
 
@@ -174,33 +175,40 @@ class _RepeatCurrent(TableTargets):
         )
 
 
-def _constructor_targets(t=T):
+def _constructor_targets(root, tradable: dict, anchor=T, end=None):
+    """Top-1 targets on a CRSP store of the bars around ``T``; tradable at ``T`` per ``tradable``."""
     rule = TopNConstructor(TopNConfig(direction="long_only", top_n=1))
     rule.bind([LabelSpec("ret", "raw", 1, 1)])
-    return ConstructorTargets(rule, RebalanceCalendar(pd.DatetimeIndex([t, t + pd.offsets.BDay()]), 1))
+    bars = pd.DatetimeIndex([T - pd.offsets.BDay(), T, T + pd.offsets.BDay()])
+    open_ = {p: [10.0, 10.0 if ok else np.nan, 10.0] for p, ok in tradable.items()}
+    close = {p: [10.0, 10.0, 10.0] for p in tradable}
+    return ConstructorTargets(
+        DecisionInputs(
+            _crsp_dataset(Path(root), bars, open_, close), rule,
+            fill_column="adjOpen", valuation_column="adjClose",
+            rebalance_periods=1, anchor=anchor, end=end,
+        )
+    )
 
 
-def _closed_inputs(close: dict, predictions: dict, tradable: dict) -> DecisionInputs:
+def _closed_inputs(close: dict, predictions: dict) -> BarInputs:
     close = pd.Series(close, dtype=float)
-    return DecisionInputs(
+    return BarInputs(
         timestamp=T,
         predictions=xr.Dataset(
             {"ret": ("symbol", list(predictions.values()))},
             coords={"symbol": list(predictions)},
         ),
-        tradable=pd.Series(tradable, dtype=bool),
         close=close,
-        decision_prices=None,
         delisted=pd.Series(False, index=close.index),
     )
 
 
-def test_constructor_targets_decide_through_the_rule_on_a_rebalance_bar():
-    cycle = DecisionCycle(_constructor_targets())
+def test_constructor_targets_decide_through_the_rule_on_a_rebalance_bar(tmp_path):
+    cycle = DecisionCycle(_constructor_targets(tmp_path, {10001: True, 10002: True}))
 
     result = cycle.run(
-        _closed_inputs({10001: 10.0, 10002: 20.0}, {10001: 0.1, 10002: 0.2},
-                       {10001: True, 10002: True}),
+        _closed_inputs({10001: 10.0, 10002: 20.0}, {10001: 0.1, 10002: 0.2}),
         positions={},
         cash=1000.0,
     )
@@ -209,32 +217,26 @@ def test_constructor_targets_decide_through_the_rule_on_a_rebalance_bar():
     assert result.orders == (NextOpenOrder(10002, "BUY", 50, T),)
 
 
-def test_constructor_targets_skip_a_bar_that_does_not_rebalance():
-    cycle = DecisionCycle(_constructor_targets(t=T - pd.offsets.BDay()))
+def test_constructor_targets_skip_a_bar_that_does_not_rebalance(tmp_path):
+    # T is the replay's last bar: an order decided there has no next bar to fill on.
+    cycle = DecisionCycle(_constructor_targets(tmp_path, {10001: True}, anchor=T - pd.offsets.BDay(), end=T))
 
-    result = cycle.run(
-        _closed_inputs({10001: 10.0}, {10001: 0.1}, {10001: True}), positions={}, cash=10.0
-    )
+    result = cycle.run(_closed_inputs({10001: 10.0}, {10001: 0.1}), positions={}, cash=10.0)
 
     assert result.decision is None
 
 
-def test_a_held_security_missing_from_the_prediction_row_is_decided_as_unpredicted():
+def test_a_held_security_missing_from_the_prediction_row_is_decided_as_unpredicted(tmp_path):
     # 10003 is held but the panel has no row for it: tradable, it is sold;
     # without a fill price it would be locked and kept.
-    cycle = DecisionCycle(_constructor_targets())
     close = {10001: 10.0, 10002: 20.0, 10003: 5.0}
+    predictions = {10001: 0.1, 10002: 0.2}
 
-    sold = cycle.run(
-        _closed_inputs(close, {10001: 0.1, 10002: 0.2},
-                       {10001: True, 10002: True, 10003: True}),
-        positions={10003: 100},
-        cash=500.0,
+    sold = DecisionCycle(_constructor_targets(tmp_path / "sold", {10001: True, 10002: True, 10003: True})).run(
+        _closed_inputs(close, predictions), positions={10003: 100}, cash=500.0,
     )
-    kept = cycle.run(
-        _closed_inputs(close, {10001: 0.1, 10002: 0.2}, {10001: True, 10002: True}),
-        positions={10003: 100},
-        cash=500.0,
+    kept = DecisionCycle(_constructor_targets(tmp_path / "kept", {10001: True, 10002: True, 10003: False})).run(
+        _closed_inputs(close, predictions), positions={10003: 100}, cash=500.0,
     )
 
     assert sold.orders == (

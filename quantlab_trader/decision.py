@@ -6,9 +6,10 @@ raw close, asks its ``TargetSource`` for the bar's target weights and sizes
 each finite target into ``trunc(w * equity / close) - position`` shares, sells
 first. A NaN target keeps the holding, and so does a target equal to the
 holding's current weight (a locked position the rule kept). Closed and open
-loop differ only in the target source: ``ConstructorTargets`` runs quantlab's
-``build_context`` + ``decide`` on the rebalance calendar, ``TableTargets``
-reads a ``weights.zarr`` row. Both return quantlab's ``Decision``.
+loop differ only in the target source: ``ConstructorTargets`` asks quantlab's
+``DecisionInputs`` whether the bar rebalances and for its context, then runs
+the rule's ``decide``; ``TableTargets`` reads a ``weights.zarr`` row. Both
+return quantlab's ``Decision``.
 
 This module imports no nautilus code: it is tested on plain arrays.
 """
@@ -24,10 +25,10 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.base.portfolio import Decision, PortfolioConstructor
+from quantlab.base.portfolio import Decision
+from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab_trader._support.jsonable import python_scalar
-from quantlab_trader.base.venue import DecisionInputs, NextOpenOrder
-from quantlab_trader.calendar import RebalanceCalendar
+from quantlab_trader.base.venue import BarInputs, NextOpenOrder
 
 
 @dataclass(frozen=True)
@@ -53,10 +54,7 @@ class CycleResult:
     >>> cycle = DecisionCycle(TableTargets(pd.DataFrame({10001: [0.5]}, index=[t])))
     >>> close = pd.Series({10001: 30.0})
     >>> result = cycle.run(
-    ...     DecisionInputs(
-    ...         timestamp=t, predictions=None, tradable=close.notna(), close=close,
-    ...         decision_prices=None, delisted=close.isna(),
-    ...     ),
+    ...     BarInputs(timestamp=t, predictions=None, close=close, delisted=close.isna()),
     ...     positions={10001: 10}, cash=700.0,
     ... )
     >>> result.equity, result.current_weights.to_dict(), [o.quantity for o in result.orders]
@@ -82,13 +80,13 @@ class TargetSource(ABC):
 
     @abstractmethod
     def targets(
-        self, inputs: DecisionInputs, current_weights: pd.Series
+        self, inputs: BarInputs, current_weights: pd.Series
     ) -> Decision | None:
         """Return the bar's decision, or ``None`` when the bar does not rebalance.
 
         Parameters
         ----------
-        inputs : DecisionInputs
+        inputs : BarInputs
             What is known at the close of t.
         current_weights : pandas.Series
             Each holding's weight at t's raw close, per PERMNO.
@@ -98,10 +96,7 @@ class TargetSource(ABC):
         >>> t = pd.Timestamp("2024-01-03")
         >>> source = TableTargets(pd.DataFrame({10001: [1.0]}, index=[t]))
         >>> close = pd.Series({10001: 30.0})
-        >>> inputs = DecisionInputs(
-        ...     timestamp=t, predictions=None, tradable=close.notna(),
-        ...     close=close, decision_prices=None, delisted=close.isna(),
-        ... )
+        >>> inputs = BarInputs(timestamp=t, predictions=None, close=close, delisted=close.isna())
         >>> source.targets(inputs, pd.Series(dtype=float)).weights.values.tolist()
         [1.0]
         """
@@ -147,7 +142,7 @@ class TableTargets(TargetSource):
         )
 
     def targets(
-        self, inputs: DecisionInputs, current_weights: pd.Series
+        self, inputs: BarInputs, current_weights: pd.Series
     ) -> Decision | None:
         """Return the table's row at the decision date; holdings play no part.
 
@@ -156,10 +151,7 @@ class TableTargets(TargetSource):
         >>> t = pd.Timestamp("2024-01-03")
         >>> source = TableTargets(pd.DataFrame({10001: [0.5]}, index=[t]))
         >>> close = pd.Series({10001: 30.0})
-        >>> inputs = DecisionInputs(
-        ...     timestamp=t, predictions=None, tradable=close.notna(),
-        ...     close=close, decision_prices=None, delisted=close.isna(),
-        ... )
+        >>> inputs = BarInputs(timestamp=t, predictions=None, close=close, delisted=close.isna())
         >>> source.targets(inputs, pd.Series({10001: 0.2})).weights.values.tolist()
         [0.5]
         """
@@ -169,55 +161,58 @@ class TableTargets(TargetSource):
 class ConstructorTargets(TargetSource):
     """Closed loop: quantlab's constructor decides each rebalance bar on the account's holdings.
 
-    On a rebalance bar of ``calendar`` it hands the rule's ``build_context``
-    the bar's prediction row, tradability and decision-price history from
-    ``inputs`` and the holdings' current weights, then returns the rule's
-    ``decide``. A held security the prediction row lacks (live, a daily
-    panel without it) joins the context with NaN predictions, so the rule
-    treats it like any held name without a prediction; it is tradable where
-    the inputs say so and locked otherwise.
+    quantlab's ``DecisionInputs`` (``QuantlabRun.decision_inputs``) holds the
+    run's bound rule, price dataset and rebalance schedule. On a bar it
+    ``rebalances``, its ``context`` is built from the bar's prediction row
+    and the holdings' current weights (tradability, the decision-price
+    window and staleness read from the price dataset), and the rule's
+    ``decide`` returns the decision. A held security the prediction row
+    lacks joins the context with NaN predictions, so the rule treats it like
+    any held name without a prediction: tradable where the dataset says so,
+    locked otherwise.
 
     Parameters
     ----------
-    constructor : quantlab.base.portfolio.PortfolioConstructor
-        The bound rule (``load_constructor``).
-    calendar : RebalanceCalendar
-        Which bars rebalance.
+    decision_inputs : quantlab.portfolio.decision_inputs.DecisionInputs
+        The run's decision inputs.
 
     Examples
     --------
     quantlab's top-1 rule, rebalancing every other bar:
 
     >>> from quantlab.base.config import TopNConfig
+    >>> from quantlab.dataset.memory import FrameDataset
     >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
     >>> bars = pd.bdate_range("2024-01-02", periods=3)
-    >>> source = ConstructorTargets(
+    >>> price = xr.DataArray(
+    ...     [[30.0, 40.0]] * 3, dims=("timestamp", "symbol"),
+    ...     coords={"timestamp": bars, "symbol": ["AAA", "BBB"]},
+    ... )
+    >>> source = ConstructorTargets(DecisionInputs(
+    ...     FrameDataset(xr.Dataset({"adjOpen": price, "adjClose": price})),
     ...     TopNConstructor(TopNConfig(direction="long_only", top_n=1)),
-    ...     RebalanceCalendar(bars, 2),
-    ... )
-    >>> row = xr.Dataset({"ret": ("symbol", [0.3, 0.1])}, coords={"symbol": [10001, 10002]})
-    >>> close = pd.Series({10001: 30.0, 10002: 40.0})
-    >>> inputs = DecisionInputs(
-    ...     timestamp=bars[0], predictions=row, tradable=close.notna(),
-    ...     close=close, decision_prices=None, delisted=close.isna(),
-    ... )
+    ...     fill_column="adjOpen", valuation_column="adjClose",
+    ...     rebalance_periods=2, anchor=bars[0],
+    ... ))
+    >>> row = xr.Dataset({"ret": ("symbol", [0.3, 0.1])}, coords={"symbol": ["AAA", "BBB"]})
+    >>> close = pd.Series({"AAA": 30.0, "BBB": 40.0})
+    >>> inputs = BarInputs(timestamp=bars[0], predictions=row, close=close, delisted=close.isna())
     >>> source.targets(inputs, pd.Series(dtype=float)).weights.values.tolist()
     [1.0, 0.0]
     """
 
-    def __init__(self, constructor: PortfolioConstructor, calendar: RebalanceCalendar):
-        self.constructor = constructor
-        self.calendar = calendar
+    def __init__(self, decision_inputs: DecisionInputs):
+        self.decision_inputs = decision_inputs
 
     def targets(
-        self, inputs: DecisionInputs, current_weights: pd.Series
+        self, inputs: BarInputs, current_weights: pd.Series
     ) -> Decision | None:
         """Return the rule's decision on a rebalance bar, ``None`` on any other.
 
         Parameters
         ----------
-        inputs : DecisionInputs
-            What is known at the close of t, with the bar's prediction row.
+        inputs : BarInputs
+            What the venue knows at the close of t, with the bar's prediction row.
         current_weights : pandas.Series
             Each holding's weight at t's raw close, per PERMNO.
 
@@ -228,42 +223,38 @@ class ConstructorTargets(TargetSource):
 
         Examples
         --------
+        A source rebalancing every other bar, on its second bar:
+
         >>> from quantlab.base.config import TopNConfig
+        >>> from quantlab.dataset.memory import FrameDataset
         >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
         >>> bars = pd.bdate_range("2024-01-02", periods=3)
-        >>> source = ConstructorTargets(
+        >>> price = xr.DataArray(
+        ...     [[30.0]] * 3, dims=("timestamp", "symbol"), coords={"timestamp": bars, "symbol": ["AAA"]}
+        ... )
+        >>> source = ConstructorTargets(DecisionInputs(
+        ...     FrameDataset(xr.Dataset({"adjOpen": price, "adjClose": price})),
         ...     TopNConstructor(TopNConfig(direction="long_only", top_n=1)),
-        ...     RebalanceCalendar(bars, 2),
-        ... )
-        >>> close = pd.Series({10001: 30.0})
-        >>> inputs = DecisionInputs(
-        ...     timestamp=bars[1], predictions=None, tradable=close.notna(),
-        ...     close=close, decision_prices=None, delisted=close.isna(),
-        ... )
-        >>> source.targets(inputs, pd.Series({10001: 1.0})) is None  # not a rebalance bar
+        ...     fill_column="adjOpen", valuation_column="adjClose",
+        ...     rebalance_periods=2, anchor=bars[0],
+        ... ))
+        >>> close = pd.Series({"AAA": 30.0})
+        >>> later = BarInputs(timestamp=bars[1], predictions=None, close=close, delisted=close.isna())
+        >>> source.targets(later, pd.Series({"AAA": 1.0})) is None
         True
         """
         t = inputs.timestamp
-        if not self.calendar.rebalances(t):
+        if not self.decision_inputs.rebalances(t):
             return None
         if inputs.predictions is None:
             raise ValueError(f"ConstructorTargets at {t.date()}: the bar has no prediction row")
-        predictions = inputs.predictions.drop_vars("timestamp", errors="ignore")
         held = current_weights[current_weights != 0.0]
-        symbols = pd.Index(predictions["symbol"].values)
-        absent = held.index[~held.index.isin(symbols)]
-        if len(absent):
-            symbols = symbols.append(pd.Index(absent))
-            predictions = predictions.reindex(symbol=symbols)
-        tradable = inputs.tradable.reindex(symbols, fill_value=False).astype(bool)
-        context = self.constructor.build_context(
+        context = self.decision_inputs.context(
             t,
-            predictions,
-            xr.DataArray(tradable.to_numpy(), dims="symbol", coords={"symbol": symbols}),
+            inputs.predictions,
             xr.DataArray(held.to_numpy(dtype=float), dims="symbol", coords={"symbol": held.index}),
-            valuation_price=inputs.decision_prices,
         )
-        return self.constructor.decide(context)
+        return self.decision_inputs.constructor.decide(context)
 
 
 class DecisionCycle:
@@ -279,10 +270,7 @@ class DecisionCycle:
     >>> t = pd.Timestamp("2024-01-03")
     >>> cycle = DecisionCycle(TableTargets(pd.DataFrame({10001: [1.0]}, index=[t])))
     >>> close = pd.Series({10001: 30.0})
-    >>> inputs = DecisionInputs(
-    ...     timestamp=t, predictions=None, tradable=close.notna(),
-    ...     close=close, decision_prices=None, delisted=close.isna(),
-    ... )
+    >>> inputs = BarInputs(timestamp=t, predictions=None, close=close, delisted=close.isna())
     >>> cycle.run(inputs, positions={}, cash=1000.0).orders
     (NextOpenOrder(permno=10001, side='BUY', quantity=33, decision_date=Timestamp('2024-01-03 00:00:00')),)
     """
@@ -292,7 +280,7 @@ class DecisionCycle:
 
     def run(
         self,
-        inputs: DecisionInputs,
+        inputs: BarInputs,
         positions: Mapping[Hashable, int],
         cash: float,
     ) -> CycleResult:
@@ -300,7 +288,7 @@ class DecisionCycle:
 
         Parameters
         ----------
-        inputs : DecisionInputs
+        inputs : BarInputs
             What is known at the close of t.
         positions : Mapping
             Signed whole-share holdings per PERMNO; zero entries are ignored.
@@ -325,10 +313,7 @@ class DecisionCycle:
         >>> t = pd.Timestamp("2024-01-03")
         >>> table = pd.DataFrame({10001: [0.0], 10002: [0.5]}, index=[t])
         >>> close = pd.Series({10001: 25.0, 10002: 40.0})
-        >>> inputs = DecisionInputs(
-        ...     timestamp=t, predictions=None, tradable=close.notna(),
-        ...     close=close, decision_prices=None, delisted=close.isna(),
-        ... )
+        >>> inputs = BarInputs(timestamp=t, predictions=None, close=close, delisted=close.isna())
         >>> result = DecisionCycle(TableTargets(table)).run(inputs, {10001: 20}, cash=500.0)
         >>> [(o.permno, o.side, o.quantity) for o in result.orders]
         [(10001, 'SELL', 20), (10002, 'BUY', 12)]
@@ -363,7 +348,7 @@ class DecisionCycle:
     @staticmethod
     def _size(
         weights: xr.DataArray,
-        inputs: DecisionInputs,
+        inputs: BarInputs,
         held: Mapping[Hashable, int],
         equity: float,
         current_weights: pd.Series,

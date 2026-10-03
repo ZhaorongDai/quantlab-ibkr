@@ -3,7 +3,7 @@
 A venue is four parts. The ``InstrumentResolver`` maps a PERMNO to the venue's
 instrument (ADR 0004), the ``OpenSubmitter`` sends next-open orders to the
 market (ADR 0003), the ``DecisionSource`` hands over one bar's
-``DecisionInputs`` reading nothing later than that bar, and the
+``BarInputs`` reading nothing later than that bar, and the
 ``DecisionClock`` fires the strategy's one decision method after the close.
 The market data feed, fee and fill models and corporate actions are not
 parts: they are internals of the backtest venue, because live they are the
@@ -11,7 +11,7 @@ broker's. The account is not a part either; nautilus's ``Cache`` and
 ``Portfolio`` already present one account interface in both modes.
 
 This module imports no nautilus code at run time, so the decision core can
-use its value types (``DecisionInputs``, ``NextOpenOrder``) on plain arrays.
+use its value types (``BarInputs``, ``NextOpenOrder``) on plain arrays.
 """
 
 from __future__ import annotations
@@ -100,12 +100,7 @@ class ReplayRequest:
         from it (ADR 0003).
     predictions : xarray.Dataset or None
         Closed loop: the prediction panel over the window, whose rows the
-        decision source hands out and whose symbols the decision inputs are
-        on; ``None`` in open loop.
-    history_start : pandas.Timestamp or None
-        Closed loop: where the decision-price history starts,
-        ``bar_before(anchor, lookback_bars)`` (ADR 0008); ``None`` means
-        ``start``.
+        decision source hands out; ``None`` in open loop.
 
     Examples
     --------
@@ -121,7 +116,6 @@ class ReplayRequest:
     permnos: tuple
     loop: Loop
     predictions: xr.Dataset | None = None
-    history_start: pd.Timestamp | None = None
 
     def __post_init__(self):
         object.__setattr__(self, "loop", Loop(self.loop))
@@ -161,11 +155,13 @@ class VenueReport:
 
 
 @dataclass(frozen=True)
-class DecisionInputs:
-    """What one decision cycle may know at the close of bar t.
+class BarInputs:
+    """What one decision cycle reads from the venue at the close of bar t.
 
     Every series is indexed by PERMNO, quantlab's symbol label kept as is
-    (an integer for a CRSP panel).
+    (an integer for a CRSP panel). The rule's decision inputs (tradability,
+    the decision-price window, factors) are not here: quantlab's
+    ``DecisionInputs`` reads them from the run's price dataset (ADR 0008).
 
     Attributes
     ----------
@@ -174,15 +170,9 @@ class DecisionInputs:
     predictions : xarray.Dataset or None
         One row of the prediction panel, a variable per label on ``symbol``;
         ``None`` when the target source does not read predictions (open loop).
-    tradable : pandas.Series
-        Booleans: the security has a real fill price at t
-        (``MarketDataset.tradable_bars`` on the run's fill column).
     close : pandas.Series
         Raw close of t, the last raw close for a security without a price at
         t; NaN before a security's first price. Sizes orders and marks equity.
-    decision_prices : xarray.DataArray or None
-        Decision prices (the run's valuation column) up to and including t,
-        on ``(timestamp, symbol)``; ``None`` where nothing reads them.
     delisted : pandas.Series
         Booleans: t is the security's delisting bar
         (``MarketDataset.delisting_bars``).
@@ -190,10 +180,9 @@ class DecisionInputs:
     Examples
     --------
     >>> close = pd.Series({10001: 30.0})
-    >>> inputs = DecisionInputs(
+    >>> inputs = BarInputs(
     ...     timestamp=pd.Timestamp("2024-01-03"), predictions=None,
-    ...     tradable=close.notna(), close=close, decision_prices=None,
-    ...     delisted=close.isna(),
+    ...     close=close, delisted=close.isna(),
     ... )
     >>> inputs.close[10001]
     np.float64(30.0)
@@ -201,9 +190,7 @@ class DecisionInputs:
 
     timestamp: pd.Timestamp
     predictions: xr.Dataset | None
-    tradable: pd.Series
     close: pd.Series
-    decision_prices: xr.DataArray | None
     delisted: pd.Series
 
 
@@ -324,7 +311,7 @@ class OpenSubmitter(ABC):
 
 
 class DecisionSource(ABC):
-    """Supplies one bar's decision inputs, reading nothing later than that bar.
+    """Supplies one bar's inputs, reading nothing later than that bar.
 
     Examples
     --------
@@ -336,7 +323,7 @@ class DecisionSource(ABC):
     """
 
     @abstractmethod
-    def inputs(self, t: pd.Timestamp) -> DecisionInputs:
+    def inputs(self, t: pd.Timestamp) -> BarInputs:
         """Return the inputs of the decision at the close of ``t``.
 
         Examples

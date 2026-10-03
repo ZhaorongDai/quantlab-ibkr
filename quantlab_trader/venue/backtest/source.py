@@ -8,7 +8,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from quantlab_trader.base.venue import DecisionInputs, DecisionSource, ReplayRequest
+from quantlab_trader.base.venue import BarInputs, DecisionSource, ReplayRequest
 from quantlab_trader.quantlab_run import QuantlabRun
 from quantlab_trader.venue.backtest.resolver import PRICE_PRECISION
 
@@ -44,20 +44,14 @@ class DelistingSettlement:
 
 
 class BacktestDecisionSource(DecisionSource):
-    """Read decision inputs from the run's price dataset, nothing later than t.
+    """Read one bar's inputs from the run's price dataset, nothing later than t.
 
-    ``tradable`` and ``delisted`` are the dataset's own
-    ``tradable_bars``/``delisting_bars`` on the run's market columns, the raw
-    close is carried forward over a security's missing bars (so a halted
-    holding is marked at its last close), and the decision prices are the
-    run's valuation column from ``history_start`` (the window's first bar by
-    default) to t.
-
-    With ``predictions`` (closed loop) each bar's inputs carry its row of
-    the prediction panel, and ``tradable`` and the decision prices are on
-    the panel's symbols, which a rule's context is built on (quantlab's
-    panel loop builds it on the same ones); otherwise they are on
-    ``permnos``.
+    ``delisted`` is the dataset's own ``delisting_bars`` on the run's
+    valuation column, and the raw close is carried forward over a security's
+    missing bars (so a halted holding is marked at its last close). With
+    ``predictions`` (closed loop) each bar's inputs carry its row of the
+    prediction panel; the rule's other decision inputs (tradability, the
+    decision-price window) are read by quantlab's ``DecisionInputs``.
 
     On a delisting bar b the raw close is the security's **last valuation**
     in raw prices: its last raw close grown by the valuation column's return
@@ -75,8 +69,7 @@ class BacktestDecisionSource(DecisionSource):
     request : ReplayRequest
         The window (inclusive), the securities the strategy can trade and,
         closed loop, the prediction panel over the window (one variable per
-        label on ``(timestamp, symbol)``) and the first bar of the
-        decision-price history (``start`` when unset).
+        label on ``(timestamp, symbol)``).
 
     Examples
     --------
@@ -88,29 +81,13 @@ class BacktestDecisionSource(DecisionSource):
 
     def __init__(self, run: QuantlabRun, request: ReplayRequest):
         start, end, permnos = request.start, request.end, request.permnos
-        predictions, history_start = request.predictions, request.history_start
+        predictions = request.predictions
         dataset = run.price_dataset
-        fill_column = run.market["fill_price_column"]
         valuation_column = run.market["valuation_price_column"]
         prices = dataset.panel(start, end, symbols=list(permnos)).load()
         self.prices = prices
         self._calendar = pd.DatetimeIndex(prices["timestamp"].values)
         self._predictions = predictions
-        decision_symbols = (
-            list(permnos) if predictions is None else list(predictions["symbol"].values)
-        )
-        history = dataset.panel(
-            start if history_start is None else min(history_start, start),
-            end,
-            symbols=decision_symbols,
-        )
-        # The whole panel: a dataset's tradable_bars may read more than the fill column.
-        self._tradable = (
-            dataset.tradable_bars(history.sel(timestamp=slice(start, end)), fill_column)
-            .load()
-            .to_pandas()
-        )
-        self._decision_prices = history[valuation_column].transpose("timestamp", "symbol").load()
         self._delisted = dataset.delisting_bars(prices, valuation_column).to_pandas()
         raw_close = prices["close"].transpose("timestamp", "symbol").to_pandas()
         last_value = self._last_valuation(
@@ -174,7 +151,7 @@ class BacktestDecisionSource(DecisionSource):
         """
         return self._settlements
 
-    def inputs(self, t: pd.Timestamp) -> DecisionInputs:
+    def inputs(self, t: pd.Timestamp) -> BarInputs:
         """Return the inputs of the decision at the close of ``t``.
 
         Parameters
@@ -184,9 +161,8 @@ class BacktestDecisionSource(DecisionSource):
 
         Returns
         -------
-        DecisionInputs
-            Nothing in them is later than ``t``; ``decision_prices`` run from
-            the history start to ``t``.
+        BarInputs
+            Nothing in them is later than ``t``.
 
         Examples
         --------
@@ -198,11 +174,9 @@ class BacktestDecisionSource(DecisionSource):
         predictions = None
         if self._predictions is not None and t in self._predictions.indexes["timestamp"]:
             predictions = self._predictions.sel(timestamp=t, drop=True)
-        return DecisionInputs(
+        return BarInputs(
             timestamp=t,
             predictions=predictions,
-            tradable=self._tradable.loc[t],
             close=self._close.loc[t],
-            decision_prices=self._decision_prices.sel(timestamp=slice(None, t)),
             delisted=self._delisted.loc[t],
         )

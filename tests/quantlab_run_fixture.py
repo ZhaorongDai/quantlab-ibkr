@@ -10,11 +10,11 @@ real run directory (``config.json`` with its ``market`` block,
 ``tests/``.
 
 ``build_constructor_run`` builds a closed-loop run the way ADR 0007 has
-the parity fixtures built: a model-free ``PredictionPanel``, the rule's own
-``construct_panel`` over it with the inputs quantlab's cross-section
-backtester hands it (``tradable_bars``, ``rebalance_mask``, the fill and
-valuation prices from ``bar_before(first, lookback_bars)``,
-``delisting_bars``), ``run_weights`` of a ``CrossSectionBacktestConfig``
+the parity fixtures built: a model-free ``PredictionPanel``, quantlab's
+``DecisionInputs.weights`` over it (the inputs quantlab's cross-section
+backtester assembles: tradability, the rebalance schedule, the rule's
+``history_bars`` price window, the delisting marks), ``run_weights`` of a
+``CrossSectionBacktestConfig``
 carrying the rule (so ``config.json`` records it), and the panel written as
 the run's ``predictions.zarr``.
 
@@ -41,18 +41,17 @@ import xarray as xr
 
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.backtest.predefined.weights import WeightsVectorBt
-from quantlab.backtest.selection import rebalance_mask
 from quantlab.base.config import (
     CrossSectionBacktestConfig,
     CrspDatasetConfig,
     DatasetConfig,
     WeightsBacktestConfig,
 )
-from quantlab.base.data import InsufficientHistoryError
 from quantlab.base.portfolio import LabelSpec, PortfolioConstructor, PredictionPanel
 from quantlab.base.tracking import Tracker
 from quantlab.dataset.crsp import CrspStockDataset
 from quantlab.dataset.stock import StockDataset
+from quantlab.portfolio.decision_inputs import DecisionInputs
 
 #: The adjusted group is the raw group times this, so a raw/adjusted mix-up
 #: changes every number a test checks.
@@ -246,7 +245,7 @@ def build_constructor_run(
     ``bars[first_bar]`` (the bars before it are the rule's warm-up).
     ``predictions`` gives each label's prediction per PERMNO over the
     window's bars. Returns the run directory and the ISO timestamps of the
-    bars ``construct_panel`` held after a failure.
+    bars ``DecisionInputs.weights`` held after a failure.
     """
     root = Path(root)
     dataset = _crsp_dataset(root, bars, open_, close, variables=variables)
@@ -265,19 +264,14 @@ def build_constructor_run(
         coords={"timestamp": window, "symbol": symbols},
     )
     rule.bind(labels)
-    try:
-        history_start = dataset.bar_before(first, rule.lookback_bars)
-    except InsufficientHistoryError as exc:
-        history_start = dataset.bar_before(first, exc.available)
-    history = dataset.panel(history_start, last).load()
-    weights = rule.construct_panel(
-        panel,
-        dataset.tradable_bars(prices, "adjOpen"),
-        rebalance_mask(len(window), rebalance_periods),
-        fill_price=history["adjOpen"],
-        valuation_price=history["adjClose"],
-        delisted=dataset.delisting_bars(prices, "adjClose"),
-    )
+    weights = DecisionInputs(
+        dataset,
+        rule,
+        fill_column="adjOpen",
+        valuation_column="adjClose",
+        rebalance_periods=rebalance_periods,
+        anchor=first,
+    ).weights(panel, delisted=dataset.delisting_bars(prices, "adjClose"))
     failed = list(weights.attrs.pop("failed_bars"))
     weights.attrs.clear()
     backtester = USEquityCrossectionSelectStockVectorBt(

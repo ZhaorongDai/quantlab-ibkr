@@ -6,8 +6,8 @@ and valuation price columns) and its outputs, among them the rebalance table
 ``weights.zarr``, its ``metrics.json`` (the in-sample and out-of-sample
 ranges a trader run's metrics are split by), ``equity.zarr`` (the
 benchmark's curve, when the run had one) and, for a run with a model, its prediction panel
-``predictions.zarr``, from which the run's portfolio construction rule is
-rebuilt (quantlab's ``load_constructor``). trader learns everything about
+``predictions.zarr``, from which quantlab's ``DecisionInputs.from_run``
+rebuilds the run's decision inputs, its bound rule included. trader learns everything about
 the run here, without importing quantlab's backtest layer (which loads
 vectorbt).
 """
@@ -23,9 +23,9 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.base.data import MarketDataset
-from quantlab.base.portfolio import PortfolioConstructor, PredictionPanel
+from quantlab.base.portfolio import PredictionPanel
 from quantlab.base.tracking import NullTracker, Tracker
-from quantlab.portfolio.prediction_panel import load_constructor
+from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.utils import backtest_stats
 from quantlab.utils.module import get_cls_from_path, load_dataset_from_config
 
@@ -362,12 +362,16 @@ class QuantlabRun:
         """
         return PredictionPanel.read(self._require_prediction_panel())
 
-    def constructor(self) -> PortfolioConstructor:
-        """Return the run's portfolio construction rule, bound to its label specs.
+    def decision_inputs(self, end: pd.Timestamp | None = None) -> DecisionInputs:
+        """Return the run's decision inputs, its rule bound to its label specs.
 
-        Refused (ADR 0005, spec #18 stories 33-34) are a run whose valuation
-        column is not an adjusted price (decision prices are adjusted, ADR
-        0002), a run without a prediction panel, and a rule that declares
+        quantlab's ``DecisionInputs.from_run``: the bound rule, the price
+        dataset, the market columns, the rebalance period and the anchor (the
+        prediction panel's first bar). ``end`` is the replay's last bar,
+        which never rebalances (the run's last bar by default). Refused (ADR
+        0005, spec #18 stories 33-34) are a run whose valuation column is not
+        an adjusted price (decision prices are adjusted, ADR 0002), a run
+        without a prediction panel, and a rule that declares
         ``required_factors()``, which trader cannot compute without the
         factor layer.
 
@@ -378,10 +382,9 @@ class QuantlabRun:
 
         Examples
         --------
-        Closed loop decides with the bound rule::
+        Closed loop decides with them::
 
-            rule = run.constructor()
-            targets = ConstructorTargets(rule, calendar)
+            targets = ConstructorTargets(run.decision_inputs(end))
         """
         valuation = self.market["valuation_price_column"]
         if not valuation.startswith("adj"):
@@ -391,14 +394,15 @@ class QuantlabRun:
                 f"(ADR 0002)"
             )
         self._require_prediction_panel()
-        rule = load_constructor(self.run_dir)
+        inputs = DecisionInputs.from_run(self.run_dir, end=end)
+        rule = inputs.constructor
         if rule.required_factors():
             raise ValueError(
                 f"quantlab run {self.run_dir}: {type(rule).__name__} declares "
                 f"required_factors(); trader cannot compute factors and does not "
                 f"replay such a rule closed-loop"
             )
-        return rule
+        return inputs
 
     def _require_prediction_panel(self) -> Path:
         """Return the path of ``predictions.zarr``, refusing a run without one."""

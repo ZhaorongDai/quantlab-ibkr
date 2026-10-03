@@ -2,13 +2,13 @@
 
 A model-free quantlab run with a prediction panel
 (``tests/quantlab_run_fixture.py:build_constructor_run``) is replayed with
-quantlab's own constructor rebuilt from the run. What is locked here (ADR
-0007, ADR 0008):
+quantlab's own decision inputs rebuilt from the run (``DecisionInputs.from_run``).
+What is locked here (ADR 0007, ADR 0008):
 
 - on holding-independent bars (no locked position, no hold) the decided
   weights equal the run's ``weights.zarr`` row bit for bit, for TopN and for
-  mean-variance with Ledoit-Wolf (whose returns window needs the decision
-  prices from ``bar_before(anchor, lookback_bars)``);
+  mean-variance with Ledoit-Wolf (whose returns window quantlab reads from
+  the rule's last ``history_bars`` decision prices);
 - where every bar is holding-independent, closed and open loop under the
   same execution block give identical orders and equity;
 - rebalance bars are counted from the panel's first timestamp, and

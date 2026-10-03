@@ -8,10 +8,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from quantlab.base.data import InsufficientHistoryError
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.base.venue import Loop, ReplayRequest
-from quantlab_trader.calendar import RebalanceCalendar
 from quantlab_trader.decision import (
     ConstructorTargets,
     DecisionCycle,
@@ -30,10 +28,10 @@ TRACKED_BLOCKS = ("whole", "in_sample", "out_of_sample", "benchmark", "relative"
 def run(config: TraderConfig) -> Path:
     """Execute the quantlab run ``config`` names and write a trader run directory.
 
-    Closed loop (ADR 0001, 0008) rebuilds the run's rule and decides every
-    rebalance bar on the account's holdings, with the run's prediction
-    panel and the decision prices from ``bar_before(anchor, lookback_bars)``;
-    open loop executes the run's ``weights.zarr``.
+    Closed loop (ADR 0001, 0008) rebuilds the run's decision inputs
+    (quantlab's ``DecisionInputs``) and decides every rebalance bar on the
+    account's holdings with the run's prediction panel; open loop executes
+    the run's ``weights.zarr``.
 
     The run is tracked through ``config.tracker``, or the quantlab run's own
     tracker (``NullTracker`` when it had none), in the quantlab run's
@@ -57,7 +55,7 @@ def run(config: TraderConfig) -> Path:
     ------
     ValueError
         If the quantlab run cannot be executed (see ``QuantlabRun.load`` and,
-        closed loop, ``QuantlabRun.constructor``), the window is empty or
+        closed loop, ``QuantlabRun.decision_inputs``), the window is empty or
         outside the run's, or the venue refuses its execution settings.
 
     Examples
@@ -125,46 +123,22 @@ def _closed_loop(
     prediction, so instruments are made for the PERMNOs with any finite
     prediction in the window; every holding is one of them.
     """
-    rule = run.constructor()
-    panel = run.prediction_panel().predictions
-    anchor = pd.Timestamp(panel["timestamp"].values[0])
-    if anchor > end:
+    inputs = run.decision_inputs(end)
+    if inputs.anchor > end:
         raise ValueError(
             f"replay window ends {end.date()}, before the prediction panel starts "
-            f"{anchor.date()}"
+            f"{inputs.anchor.date()}"
         )
-    dataset = run.price_dataset
-    calendar = RebalanceCalendar(
-        pd.DatetimeIndex(dataset.panel(anchor, end)["timestamp"].values),
-        run.rebalance_periods,
-    )
-    predictions = panel.sel(timestamp=slice(start, end))
+    predictions = run.prediction_panel().predictions.sel(timestamp=slice(start, end))
     finite = np.zeros(predictions.sizes["symbol"], dtype=bool)
     for name in predictions.data_vars:
         finite |= np.isfinite(
             predictions[name].transpose("timestamp", "symbol").values
         ).any(axis=0)
     permnos = tuple(v.item() for v in predictions["symbol"].values[finite])
-    return ConstructorTargets(rule, calendar), ReplayRequest(
-        start,
-        end,
-        permnos,
-        Loop.CLOSED,
-        predictions=predictions,
-        history_start=_history_start(dataset, anchor, rule.lookback_bars),
+    return ConstructorTargets(inputs), ReplayRequest(
+        start, end, permnos, Loop.CLOSED, predictions=predictions
     )
-
-
-def _history_start(dataset, anchor: pd.Timestamp, lookback: int) -> pd.Timestamp:
-    """Return ``bar_before(anchor, lookback)``, or the dataset's first bar when it holds fewer.
-
-    quantlab's backtester starts the rule's prices there too, with a short
-    first window when the dataset holds fewer bars.
-    """
-    try:
-        return dataset.bar_before(anchor, lookback)
-    except InsufficientHistoryError as exc:
-        return dataset.bar_before(anchor, exc.available)
 
 
 def _window(config: TraderConfig, run: QuantlabRun) -> tuple[pd.Timestamp, pd.Timestamp]:

@@ -95,3 +95,16 @@ decision date with `PredictionPanel.write`.
   any.
 - Where the rebalance calendar is anchored is still open. `rebalance_mask` stays a backtest-layer
   helper, counted from the start of the window.
+
+## Amended by quantlab ADR 0019 (trader #34)
+
+The one-bar decision is no longer two constructor methods. quantlab moved the assembly of a
+bar's inputs into one module, `quantlab/portfolio/decision_inputs.py`: `DecisionInputs.context(t,
+predictions, current_weights)` builds the context (from the rule's last `history_bars` raw
+prices, so staleness no longer depends on the history given), `rebalances(t)` answers the
+schedule, and the rule keeps `decide`. `build_context` and `construct_panel` are deleted, and
+`load_constructor` with `quantlab/portfolio/prediction_panel.py` is replaced by
+`DecisionInputs.from_run(run_dir)`; `PredictionPanel` lives in `quantlab.base.portfolio`. trader's
+run-time imports from quantlab are therefore `quantlab.base.portfolio` and
+`quantlab.portfolio.decision_inputs` for the decision. The rebalance anchor is settled: the
+prediction panel's first bar, the last bar never rebalancing.

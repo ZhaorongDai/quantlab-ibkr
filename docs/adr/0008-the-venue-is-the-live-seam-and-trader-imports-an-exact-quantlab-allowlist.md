@@ -13,11 +13,10 @@ venue package and changes nothing else:
 quantlab_trader/
   base/config.py        TraderConfig, root VenueConfig (frozen dataclasses, get_config/from_config)
   base/venue.py         Venue and its four parts (InstrumentResolver, OpenSubmitter,
-                        DecisionSource, DecisionClock); DecisionInputs, NextOpenOrder;
+                        DecisionSource, DecisionClock); BarInputs, NextOpenOrder;
                         Loop, ReplayRequest (what VenueConfig.build is asked to run) and
                         VenueReport (what Venue.run returns, e.g. minimum-fee fills, #29)
   quantlab_run.py       QuantlabRun.load(run_dir): the only reader of a quantlab run directory
-  calendar.py           RebalanceCalendar: which bars rebalance, anchored on the run
   decision.py           DecisionCycle: targets -> whole-share next-open orders; TargetSource
                         with ConstructorTargets (closed loop) and TableTargets (open loop)
   account.py            positions by PERMNO, close-marked equity and current weights, read
@@ -38,8 +37,8 @@ Every top-level entry of `venue/` is a venue, as every top-level entry of quantl
 is a dataset. `__init__.py` files are empty; nothing is re-exported.
 
 **The venue's parts.** `InstrumentResolver` (ADR 0004), `OpenSubmitter` (ADR 0003), a
-`DecisionSource` that returns one bar's `DecisionInputs` (predictions, tradable, raw close,
-adjusted-close history, delisting marks) reading nothing later than t, and a `DecisionClock` that
+`DecisionSource` that returns one bar's `BarInputs` (the prediction row, raw close, delisting
+marks) reading nothing later than t, and a `DecisionClock` that
 calls the Strategy's one decision method (backtest: a time alert at close(t) + 1 ns; live: a timer
 after the daily prediction job). The market data feed, fee and fill models and corporate actions
 are not parts: they are inside the backtest venue, because live they are the broker's (IBKR
@@ -50,8 +49,8 @@ number the order sizing uses, in both modes.
 
 **The decision core is nautilus-free.** `DecisionCycle.run(inputs, positions, cash)` returns the
 `Decision` and the sized orders (`trunc(w * equity / close) - position`, sells first, NaN weight =
-no order). Closed and open loop differ only in the `TargetSource`: quantlab's
-`build_context` + `decide` on the rebalance calendar, or a `weights.zarr` row.
+no order). Closed and open loop differ only in the `TargetSource`: quantlab's `DecisionInputs`
+(`rebalances`, `context`) and the rule's `decide`, or a `weights.zarr` row.
 
 **The decision-price history is a slice, not a rolling buffer.** At each decision the source hands
 `build_context` the run's `adjClose` from `bar_before(anchor, lookback_bars)` to t, the same span
@@ -67,7 +66,7 @@ window's first bar for `run()`, the first fold's for `run_cv()`). Narrowing trad
 `start`/`end` does not move it, and the live run keeps counting past the run's end.
 
 **The quantlab allowlist.** trader's source may import exactly `quantlab.base.portfolio`,
-`quantlab.portfolio.prediction_panel`, `quantlab.base.data` (the `MarketDataset` check),
+`quantlab.portfolio.decision_inputs`, `quantlab.base.data` (the `MarketDataset` check),
 `quantlab.utils.module` (`load_dataset_from_config`, `get_cls_from_path`),
 `quantlab.base.tracking`, `quantlab.utils.backtest_report`, and the public returns-statistics
 module ADR 0007 has quantlab add for `metrics.json`. At run time it also loads, by class path from
@@ -113,3 +112,20 @@ on plain arrays, which is where parity bugs will be found.
   changes come before any parity run on real data.
 - Splits change a position's quantity, which nautilus does not model; the corporate-actions
   ticket starts with a spike.
+
+## Amended by quantlab ADR 0019 (trader #34)
+
+trader assembles no decision inputs of its own. `QuantlabRun.decision_inputs(end)` returns
+quantlab's `DecisionInputs.from_run(run_dir, end=end)`: the bound rule, the price dataset, the
+market columns, the rebalance period and the anchor. `ConstructorTargets` asks it whether a bar
+`rebalances` and for the bar's `context` (with the account's holdings), then calls the rule's
+`decide`. `calendar.py` (`RebalanceCalendar`), `runner._history_start`, `ReplayRequest.history_start`,
+the source's decision-price history and trader's alignment of predicted and held symbols are
+deleted; the venue's per-bar value type is renamed `BarInputs`, since quantlab's `DecisionInputs`
+now names the decision's inputs.
+
+The paragraph "The decision-price history is a slice, not a rolling buffer" no longer holds:
+quantlab bounds every decision to the rule's last `history_bars` raw prices, forward-filled within
+that window, so a decision no longer depends on where the history starts, and the replay keeps no
+history of its own. The rebalance anchor is still the run's (the prediction panel's first bar),
+and the replay's last bar still never rebalances (`end`).

@@ -41,7 +41,7 @@ PACKAGE = Path(__file__).resolve().parents[1] / "quantlab_trader"
 #: return-statistics module (ADR 0007) among them.
 ALLOWED = {
     "quantlab.base.portfolio",
-    "quantlab.portfolio.prediction_panel",
+    "quantlab.portfolio.decision_inputs",
     "quantlab.base.data",
     "quantlab.utils.module",
     "quantlab.base.tracking",
@@ -194,3 +194,21 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
     with xr.open_zarr(run_dir / "decisions.zarr") as decisions:
         assert decisions.sizes["timestamp"] > 0
     assert report["loaded"] == []
+
+
+def test_trader_assembles_no_decision_inputs_of_its_own():
+    """No rebalance calendar, history start or symbol alignment of trader's own (quantlab#125):
+    the schedule and the context come from quantlab's ``DecisionInputs``."""
+    defined, imported = set(), set()
+    for path in PACKAGE.rglob("*.py"):
+        for node in ast.walk(ast.parse(path.read_text())):
+            if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+                defined.add(node.name)
+            elif isinstance(node, ast.Attribute):
+                defined.add(node.attr)
+            elif isinstance(node, ast.ImportFrom) and node.module == "quantlab.portfolio.decision_inputs":
+                imported.update(alias.name for alias in node.names)
+    retired = {"RebalanceCalendar", "_history_start", "history_start", "build_context", "bar_before", "rebalance_mask"}
+    assert not (PACKAGE / "calendar.py").exists()
+    assert defined & retired == set()
+    assert "DecisionInputs" in imported
