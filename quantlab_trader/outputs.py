@@ -6,6 +6,9 @@
   data fingerprints);
 - ``decisions.zarr``: ``weight`` on ``(timestamp, symbol)``, one row per
   decision, in rebalance-table format (comparable with ``weights.zarr``);
+- ``holdings.zarr``: ``weight`` on ``(timestamp, symbol)``, the actual book
+  at each close (each holding's value over equity, 0 when not held), which
+  the report's Portfolio tab draws;
 - ``equity.zarr``: ``value`` (cash plus holdings at the raw close) and
   ``returns`` on ``timestamp``, quantlab's layout;
 - ``orders.zarr``: one row per next-open order on ``order``: ``decision_date``,
@@ -22,7 +25,8 @@
   ``quantity``, ``price``, ``fee``; never in ``orders.zarr``), cash bookings
   and logged factor days (``quantity`` held, ``amount`` of cash);
 - ``metrics.json``: quantlab's layout and names (``quantlab_trader.metrics``);
-- ``report.html``: quantlab's backtest report of the run.
+- ``report.html``: quantlab's backtest report of the run, built with
+  quantlab's report-input builders.
 
 The directory is written under a temporary name and renamed when complete, so
 a failed run leaves no half-written directory.
@@ -41,12 +45,18 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.utils import backtest_stats
-from quantlab.utils.backtest_report import write_backtest_report
+from quantlab.utils.backtest_report import (
+    report_chart_inputs,
+    report_portfolio_inputs,
+    report_summary,
+    report_windows,
+    write_backtest_report,
+)
 from quantlab_trader._support.jsonable import jsonable, python_scalar
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.base.venue import MARKET_TZ, Loop, NextOpenOrder, VenueReport
 from quantlab_trader.decision import CycleResult
-from quantlab_trader.metrics import CycleRecord, bar_label, run_metrics, window_benchmark
+from quantlab_trader.metrics import CycleRecord, cut_folds, run_metrics, window_benchmark
 from quantlab_trader.quantlab_run import QuantlabRun
 
 #: The notes of every trader run's ``metrics.json`` and report.
@@ -57,6 +67,12 @@ NOTES = (
     "optimistic.",
     "Total Orders counts the next-open orders that filled; corporate-action venue "
     "fills (splits, delisting settlements) are not orders.",
+    "The trade metrics are position round trips of the actual fills, open to flat: "
+    "dividends, value distributions and cash in lieu received while open count in a "
+    "trip's PnL, a split does not end it and a delisting settlement does.",
+    "The Portfolio tab draws the actual holdings at each close, not the decided targets.",
+    "The triangles on the equity curve mark the deepest drawdown from its valley to "
+    "its recovery.",
 )
 
 
@@ -435,13 +451,15 @@ class RunRecorder:
         try:
             self._write_config(partial / "config.json")
             decisions = self._decisions_dataset()
+            holdings = self._holdings_dataset()
             equity = self._equity_dataset()
             orders = self._orders_dataset()
             decisions.to_zarr(partial / "decisions.zarr", mode="w")
+            holdings.to_zarr(partial / "holdings.zarr", mode="w")
             equity.to_zarr(partial / "equity.zarr", mode="w")
             orders.to_zarr(partial / "orders.zarr", mode="w")
             (partial / "events.json").write_text(json.dumps({"events": self._events}, indent=2))
-            self._write_metrics_and_report(partial, decisions, equity, orders, report)
+            self._write_metrics_and_report(partial, holdings, equity, orders, report)
             partial.rename(run_dir)
         except BaseException:
             shutil.rmtree(partial, ignore_errors=True)
@@ -451,12 +469,21 @@ class RunRecorder:
     def _write_metrics_and_report(
         self,
         directory: Path,
-        decisions: xr.Dataset,
+        holdings: xr.Dataset,
         equity: xr.Dataset,
         orders: xr.Dataset,
         report: VenueReport,
     ) -> None:
-        """Compute the metrics, then write ``metrics.json`` and ``report.html``."""
+        """Compute the metrics, then write ``metrics.json`` and ``report.html``.
+
+        The page's inputs come from quantlab's builders, as a quantlab run's
+        do: ``report_summary`` (Setup: the quantlab run's config, ``Fees``
+        the venue's actual fee model, then the trader lines),
+        ``report_windows`` (the quantlab run's folds, cut to the trader's
+        bars), ``report_chart_inputs`` (the deepest drawdown, the benchmark)
+        and ``report_portfolio_inputs`` of the actual holdings at each close;
+        ``execution.trader`` is the "Execution (event-driven)" table.
+        """
         run = self.run
         timestamps = pd.DatetimeIndex(equity["timestamp"].values)
         # quantlab's engine: the most common spacing of the window's bars.
@@ -472,7 +499,6 @@ class RunRecorder:
             run.price_dataset.panel(timestamps[0], timestamps[-1])["close"]
             .transpose("timestamp", "symbol")
             .to_pandas()
-            .ffill()
         )
         closes.columns = [python_scalar(v) for v in closes.columns]
         benchmark = run.benchmark()
@@ -498,47 +524,64 @@ class RunRecorder:
         (directory / "metrics.json").write_text(
             json.dumps(jsonable(self.metrics), indent=2)
         )
-        report_benchmark = {}
+
+        records = run.report_records()
+        block = dict(self.metrics)
+        if records["trained_checkpoint"] is not None:
+            block["trained_checkpoint"] = records["trained_checkpoint"]
+        span = backtest_stats.drawdown_span(equity["value"])
+        summary = report_summary(
+            run.config,
+            block,
+            bar_interval=bar_interval,
+            drawdown_span=span,
+            benchmark_source=records["benchmark_source"],
+        )
+        summary["Fees"] = report.fees or "-"
+        summary.update(
+            {
+                "Quantlab run": str(run.run_dir),
+                "Loop": f"{self.config.loop.value} loop",
+                "Slippage": "-" if report.slippage is None else str(report.slippage),
+                "Init cash": f"{self.init_cash:,.2f}",
+            }
+        )
+        benchmark_curves = {}
         if benchmark is not None:
             returns = window_benchmark(benchmark["returns"], equity["timestamp"].values)
-            report_benchmark = dict(
+            benchmark_curves = dict(
                 benchmark_returns=returns,
                 benchmark_value=self.init_cash * (1.0 + returns.fillna(0.0)).cumprod("timestamp"),
-                benchmark_name=str(benchmark.get("symbol") or "benchmark"),
             )
-        execution = self.config.venue.get_config().get("execution", {})
         write_backtest_report(
             equity["value"],
             directory / "report.html",
-            in_sample_range=self.metrics.get("in_sample_range"),
-            notes=list(NOTES),
             title=self.run_name,
-            summary={
-                "Quantlab run": str(run.run_dir),
-                "Loop": f"{self.config.loop.value} loop",
-                "Bar interval": str(bar_interval),
-                "Rebalance every": f"{run.rebalance_periods} bars",
-                "Execution": ", ".join(f"{k}={v}" for k, v in execution.items()) or "-",
-            },
-            metrics=self.metrics,
-            returns=equity["returns"],
-            init_cash=self.init_cash,
-            weights=decisions["weight"] if decisions.sizes["timestamp"] else None,
-            turnover=backtest_stats.turnover(
-                fills.rename(fill="order") if fills.sizes.get("fill", 0) else xr.Dataset(),
-                equity["value"],
-                self.init_cash,
+            summary=summary,
+            windows=report_windows(
+                timestamps.values, block, cut_folds(records["folds"], timestamps.values)
             ),
-            bars_per_year=year_freq / bar_interval,
-            windows={
-                "backtest": (bar_label(timestamps[0]), bar_label(timestamps[-1])),
-                "bars": len(timestamps),
-                "in_sample": list(self.metrics.get("in_sample_ranges") or [])
-                + ([self.metrics["in_sample_range"]] if self.metrics.get("in_sample_range") else []),
-                "out_of_sample": list(self.metrics.get("out_of_sample_ranges") or []),
-                "folds": [],
-            },
-            **report_benchmark,
+            metrics=self.metrics,
+            extra_tables={"Execution (event-driven)": _execution_table(self.metrics)},
+            **report_chart_inputs(
+                block,
+                list(NOTES),
+                returns=equity["returns"],
+                init_cash=self.init_cash,
+                drawdown_span=span,
+                **benchmark_curves,
+            ),
+            **report_portfolio_inputs(
+                holdings["weight"],
+                fills.rename(fill="order")
+                if fills.sizes.get("fill", 0)
+                else xr.Dataset({name: ("order", []) for name in ("timestamp", "size", "price")}),
+                equity["value"],
+                init_cash=self.init_cash,
+                bar_interval=bar_interval,
+                trading_days_per_year=run.trading_days_per_year,
+                session_minutes_per_day=run.session_minutes_per_day,
+            ),
         )
 
     def _fills_dataset(self, report: VenueReport) -> xr.Dataset:
@@ -581,6 +624,22 @@ class RunRecorder:
             frame.index.name, frame.columns.name = "timestamp", "symbol"
             weight = xr.DataArray(frame.astype(float), dims=("timestamp", "symbol"))
         return xr.Dataset({"weight": weight})
+
+    def _holdings_dataset(self) -> xr.Dataset:
+        """``weight`` on ``(timestamp, symbol)``: each holding's value at the close over equity.
+
+        One row per bar, the actual book after the bar's fills and corporate
+        actions; a security not held is 0.
+        """
+        frame = pd.DataFrame(
+            {cycle.timestamp: cycle.current_weights for cycle in self._cycles}
+        ).T
+        frame = frame.reindex(
+            index=pd.DatetimeIndex([cycle.timestamp for cycle in self._cycles]),
+            columns=sorted(frame.columns),
+        ).astype(float).fillna(0.0)
+        frame.index.name, frame.columns.name = "timestamp", "symbol"
+        return xr.Dataset({"weight": xr.DataArray(frame, dims=("timestamp", "symbol"))})
 
     def _equity_dataset(self) -> xr.Dataset:
         value = pd.Series(self._equity, dtype=float).sort_index()
@@ -626,3 +685,23 @@ def _market_day(ts_ns: int) -> str:
     """Return the market-time-zone date of UNIX nanoseconds ``ts_ns``."""
     return _day(pd.Timestamp(ts_ns, tz="UTC").tz_convert(MARKET_TZ))
 
+
+def _execution_table(metrics: dict) -> dict:
+    """The "Execution (event-driven)" rows: ``execution.trader``, facts quantlab has no row for."""
+    trader = metrics["execution"]["trader"]
+    return {
+        "Commissions": trader["commissions"],
+        "Minimum-fee hits": trader["minimum_fee_hits"],
+        "Dividends": trader["dividends"]["count"],
+        "Dividend cash": trader["dividends"]["amount"],
+        "Value distributions": trader["value_distributions"]["count"],
+        "Value distribution cash": trader["value_distributions"]["amount"],
+        "Cash in lieu": trader["cash_in_lieu"]["count"],
+        "Cash in lieu amount": trader["cash_in_lieu"]["amount"],
+        "Splits": trader["splits"]["count"],
+        "Split share change": trader["splits"]["share_change"],
+        "Implied splits": trader["implied_splits"]["count"],
+        "Implied split share change": trader["implied_splits"]["share_change"],
+        "Factor mismatches": trader["mismatches"]["count"],
+        "Peak cash debit": trader["peak_cash_debit"],
+    }

@@ -59,7 +59,7 @@ WEIGHTS = {
     10003: [0.0, NAN, 0.0, NAN, NAN, 0.0],
 }
 RUN_FILES = [
-    "config.json", "decisions.zarr", "equity.zarr", "events.json", "metrics.json",
+    "config.json", "decisions.zarr", "equity.zarr", "events.json", "holdings.zarr", "metrics.json",
     "orders.zarr", "report.html",
 ]
 

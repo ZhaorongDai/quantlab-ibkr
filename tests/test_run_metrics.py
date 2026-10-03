@@ -107,7 +107,8 @@ def test_whole_block_has_quantlab_names_and_the_hand_worked_values(open_replay):
     assert whole["Total Return [%]"] == pytest.approx(27.4687, abs=1e-9)
     assert whole["Total Orders"] == 4
     assert whole["Total Fees Paid"] == pytest.approx(22.33, abs=1e-9)
-    assert whole["Traded Notional"] == pytest.approx(5250 + 5050 + 6200 + 5830.8, abs=1e-9)
+    # quantlab's whole block has no Traded Notional; its slices do.
+    assert "Traded Notional" not in whole
     turnovers = [10_300 / 10_000, (6200 + 5830.8) / 11_189.70]
     assert whole["Total Turnover [%]"] == pytest.approx(100 * sum(turnovers), abs=1e-9)
     assert whole["Turnover per Rebalance [%]"] == pytest.approx(50 * sum(turnovers), abs=1e-9)
@@ -152,6 +153,7 @@ def test_the_report_is_written(open_replay):
 
     assert run_dir.name in page
     assert "Total Orders" in page
+    assert "Execution (event-driven)" in page
 
 
 def _write_split(quantlab_run, **split):
@@ -186,6 +188,7 @@ def test_in_and_out_of_sample_use_the_quantlab_run_ranges(tmp_path):
     )
     assert (in_sample["Total Orders"], out_of_sample["Total Orders"]) == (2, 2)
     assert in_sample["Total Fees Paid"] == pytest.approx(10.30)
+    assert in_sample["Traded Notional"] == pytest.approx(5250 + 5050, abs=1e-9)
     assert out_of_sample["Total Fees Paid"] == pytest.approx(12.03)
     assert in_sample["Total Turnover [%]"] == pytest.approx(103.0)
     # 10001 is sold on bar 3, 10002 is still held.

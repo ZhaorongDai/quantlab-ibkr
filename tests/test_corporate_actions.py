@@ -335,3 +335,32 @@ def test_metrics_report_dividends_splits_and_distributions_under_execution_trade
     # Six round trips; 10001 (sold after its split), 10006 and 10005 closed.
     assert (whole["Total Trades"], whole["Total Closed Trades"], whole["Total Open Trades"]) == (6, 3, 3)
     assert whole["Total Orders"] == 7
+
+
+def test_round_trip_statistics_equal_the_hand_count(replay):
+    """Position round trips of the hand ledger, fees 0.1% of each next-open notional.
+
+    Closed: 10001 bought 400 @50 (fee 20), split 2:1 and sold 800 @26.5 (fee
+    21.20): PnL 21 200 - 20 000 - 41.20 = 1 158.80 over 2 bars; 10005 500 @20
+    (fee 10) settled @23.65: 1 815 over 6 bars; the short 10006 1 000 @10 (fee
+    10) settled @8.40: 1 590 over 4 bars. Open at bar 7's close: 10002 (500
+    @40, fee 20, 166 shares after its reverse split, cash in lieu +84) marked
+    166 * 130: 1 644; the short 10003 (625 @16, fee 10, -937 after its split,
+    cash in lieu -5, dividend -93.70) marked 937 * 11: -415.70; 10004 (200
+    @100, fee 20, dividends 100 + 50, spin-off 4 200) marked 200 * 86: 1 530.
+    """
+    whole = json.loads((replay / "metrics.json").read_text())["whole"]
+
+    closed_pnl = [1_158.80, 1_815.0, 1_590.0]
+    closed_return = [1_158.80 / 20_000, 1_815.0 / 10_000, 1_590.0 / 10_000]
+    assert (whole["Total Trades"], whole["Total Closed Trades"], whole["Total Open Trades"]) == (6, 3, 3)
+    assert whole["Open Trade PnL"] == pytest.approx(1_644.0 - 415.70 + 1_530.0, abs=1e-6)
+    assert whole["Win Rate [%]"] == 100.0
+    assert whole["Best Trade [%]"] == pytest.approx(100 * max(closed_return), rel=1e-9)
+    assert whole["Worst Trade [%]"] == pytest.approx(100 * min(closed_return), rel=1e-9)
+    assert whole["Avg Winning Trade [%]"] == pytest.approx(100 * sum(closed_return) / 3, rel=1e-9)
+    assert whole["Avg Losing Trade [%]"] is None
+    assert whole["Avg Winning Trade Duration"] == "4 days 00:00:00"
+    assert whole["Avg Losing Trade Duration"] is None
+    assert whole["Profit Factor"] is None  # no losing trip: infinite
+    assert whole["Expectancy"] == pytest.approx(sum(closed_pnl) / 3, rel=1e-9)

@@ -5,18 +5,21 @@ decisions and events) into the blocks a quantlab run's ``metrics.json``
 has, computed by quantlab's own public statistics
 (``quantlab.utils.backtest_stats``) so the numbers are comparable:
 
-- ``whole``: the return statistics over the trader window, ``Start Value``
-  and ``End Value``, ``Total Orders`` (fills of next-open orders), ``Total Fees
-  Paid``, ``Traded Notional``, the position-level trade counts, the three
-  turnover rows and the win rates;
-- ``in_sample`` / ``out_of_sample``: the same over the quantlab run's ranges,
-  cut to the trader window, ``None`` where nothing is left; a run without a
-  model (``run_weights()``) has neither, as in quantlab;
+- ``whole``: quantlab's rows in quantlab's order (a vectorbt run's): the return statistics over the trader window, ``Start
+  Value`` and ``End Value``, ``Max Gross Exposure [%]``, ``Total Fees Paid``,
+  the round-trip trade statistics, the three turnover rows, ``Total Orders``
+  (fills of next-open orders) and the win rates;
+- ``in_sample`` / ``out_of_sample``: quantlab's slice rows (return
+  statistics, ``Total Orders``, ``Total Fees Paid``, ``Traded Notional``, the
+  closed and open round trips, turnover, win rates) over the quantlab run's
+  ranges, cut to the trader window, ``None`` where nothing is left; a run
+  without a model (``run_weights()``) has neither, as in quantlab;
 - ``execution``: ``rejected_order_count`` and ``rejected_orders`` (next-open
   orders with a fill bar in the window that did not fill; the holding was
   kept), ``max_target_deviation``, ``settlements`` (delisted holdings settled
   into cash), and ``trader``, the facts quantlab has no name for:
-  commissions, minimum-fee hits, dividends, splits, implied splits (#27), value distributions and
+  commissions, minimum-fee hits, dividends, cash in lieu, value
+  distributions, splits, implied splits (#27), factor mismatches (#28) and
   the peak cash debit;
 - ``portfolio_construction`` (closed loop): the held bars and the rule's
   events, as quantlab's cross-section backtester records them;
@@ -30,6 +33,21 @@ finite target of a decision with a fill bar, the held weight being the
 position after the fill bar valued at t's raw close over t's close-marked
 equity. Whole-share rounding, unfilled orders and partial fills show in it;
 settled securities are left out.
+
+The round trips are quantlab's (``backtest_stats.round_trips``, glossary
+"Round-trip trade") of the run's actual fills: next-open fills and
+delisting settlements, which close a trip, the settlement before the bar's
+next-open fills. Dividends, value distributions and cash in lieu are the
+trip's cash flows on their ex-date bar. Splits and implied splits do not end
+a trip: share counts are restated in the units of the window's first bar (a
+split taking ``q`` shares to ``q'`` multiplies the security's factor by
+``q' / q``; every later fill's size is divided by it and its price and the
+close multiplied by it), so values are unchanged; a reverse split leaving
+no share closes the trip at price 0, its cash in lieu then the trip's last
+flow. A delisted security is marked on its delisting bar at its settlement
+price, as the equity is. ``Max Gross Exposure [%]`` is
+``backtest_stats.exposure_stats`` of the same fills and closes against the
+cash at each close.
 
 This module imports no nautilus code.
 """
@@ -92,18 +110,6 @@ class CycleRecord:
     equity: float
 
 
-def bar_label(value) -> str:
-    """Return quantlab's label of a bar: an ISO date at midnight, else an ISO timestamp.
-
-    Examples
-    --------
-    >>> bar_label(pd.Timestamp("2024-01-02")), bar_label(pd.Timestamp("2024-01-02 15:30"))
-    ('2024-01-02', '2024-01-02T15:30:00')
-    """
-    ts = pd.Timestamp(value)
-    return ts.strftime("%Y-%m-%d") if ts == ts.normalize() else ts.isoformat()
-
-
 def window_benchmark(returns: xr.DataArray, timestamps) -> xr.DataArray:
     """Return the benchmark's per-bar returns over the trader's bars, held from the first close.
 
@@ -158,7 +164,7 @@ def run_metrics(
     events : sequence of dict
         The run's ``events.json`` events.
     closes : pandas.DataFrame
-        Raw closes, decision dates by PERMNO, carried forward.
+        Raw closes, the run's bars by PERMNO, NaN where there was none.
     init_cash : float
         Starting cash.
     bar_interval
@@ -200,16 +206,35 @@ def run_metrics(
     stats = _Stats(equity, fills, init_cash, bar_interval, year_freq, rebalance_periods)
     timestamps = equity["timestamp"].values
     calendar = pd.DatetimeIndex(timestamps)
-    whole_range = [(bar_label(timestamps[0]), bar_label(timestamps[-1]))]
-    trades = _trades(fills, events)
+    whole_range = [(backtest_stats.bar_label(timestamps[0]), backtest_stats.bar_label(timestamps[-1]))]
+    executed = _executions(fills, events, closes.reindex(calendar))
+    trips = backtest_stats.round_trips(
+        executed.fills, executed.close, cash_flows=executed.cash_flows
+    )
+    cash = xr.DataArray(
+        [c.equity * (1.0 - float(c.current_weights.sum())) for c in cycles],
+        dims="timestamp",
+        coords={"timestamp": [c.timestamp for c in cycles]},
+    ).reindex(timestamp=calendar)
 
+    returns = stats.returns(whole_range)
+    records = stats.records(whole_range)
     whole = {
-        **stats.returns(whole_range),
+        **{name: returns[name] for name in ("Start", "End", "Period")},
         "Start Value": float(init_cash),
         "End Value": float(equity["value"].values[-1]),
-        **stats.records(whole_range),
-        "Total Trades": len(trades),
-        **_trade_counts(trades, whole_range),
+        "Total Return [%]": returns["Total Return [%]"],
+        **backtest_stats.exposure_stats(executed.fills, executed.close, cash),
+        "Total Fees Paid": records["Total Fees Paid"],
+        "Max Drawdown [%]": returns["Max Drawdown [%]"],
+        "Max Drawdown Duration": returns["Max Drawdown Duration"],
+        **backtest_stats.round_trip_stats(trips, bar_interval=bar_interval),
+        **{
+            name: returns[name]
+            for name in ("Sharpe Ratio", "Calmar Ratio", "Omega Ratio", "Sortino Ratio")
+        },
+        **stats.turnover_rows(whole_range),
+        "Total Orders": records["Total Orders"],
         **stats.win_rates(whole_range),
     }
     settlements = _settlements(events, calendar)
@@ -237,7 +262,8 @@ def run_metrics(
             {
                 **stats.returns(ranges),
                 **stats.records(ranges),
-                **_trade_counts(trades, ranges),
+                **_trade_counts(trips, ranges),
+                **stats.turnover_rows(ranges),
                 **stats.win_rates(ranges),
             }
             if ranges
@@ -299,7 +325,7 @@ class _Stats:
         )
 
     def records(self, ranges) -> dict:
-        """``Total Orders``, ``Total Fees Paid``, ``Traded Notional`` and turnover in ``ranges``."""
+        """``Total Orders``, ``Total Fees Paid`` and ``Traded Notional`` in ``ranges``."""
         fills = self.fills
         if fills.sizes.get("fill", 0):
             inside = backtest_stats.in_ranges(fills["timestamp"].values, ranges)
@@ -311,13 +337,14 @@ class _Stats:
             notional = float((size * price).sum())
         else:
             orders, fees, notional = 0, 0.0, 0.0
+        return {"Total Orders": orders, "Total Fees Paid": fees, "Traded Notional": notional}
+
+    def turnover_rows(self, ranges) -> dict:
+        """The three turnover rows of the fill bars in ``ranges``."""
         turnover = self.turnover.isel(
             timestamp=backtest_stats.in_ranges(self.turnover["timestamp"].values, ranges)
         )
         return {
-            "Total Orders": orders,
-            "Total Fees Paid": fees,
-            "Traded Notional": notional,
             **backtest_stats.turnover_stats(
                 turnover,
                 bar_interval=self.bar_interval,
@@ -349,6 +376,19 @@ class _Stats:
         }
 
 
+def _cut(pair, calendar: pd.DatetimeIndex) -> list[str] | None:
+    """Return ``pair`` narrowed to its first and last bar of ``calendar``; ``None`` when none is left."""
+    if pair is None:
+        return None
+    inside = calendar[
+        (calendar >= pd.Timestamp(backtest_stats.label_ns(pair[0])))
+        & (calendar <= pd.Timestamp(backtest_stats.label_ns(pair[1])))
+    ]
+    if not len(inside):
+        return None
+    return [backtest_stats.bar_label(inside[0]), backtest_stats.bar_label(inside[-1])]
+
+
 def _cut_split(split: Mapping, calendar: pd.DatetimeIndex) -> dict:
     """Return the split keys with every range cut to the trader's bars.
 
@@ -356,25 +396,58 @@ def _cut_split(split: Mapping, calendar: pd.DatetimeIndex) -> dict:
     none is left; a singular range that empties becomes ``None``. Training
     windows are records of the model and are copied as they are.
     """
-
-    def cut(pair):
-        if pair is None:
-            return None
-        inside = calendar[
-            (calendar >= pd.Timestamp(backtest_stats.label_ns(pair[0])))
-            & (calendar <= pd.Timestamp(backtest_stats.label_ns(pair[1])))
-        ]
-        return [bar_label(inside[0]), bar_label(inside[-1])] if len(inside) else None
-
     out = {}
     for key, value in split.items():
         if key.startswith("training_window"):
             out[key] = value
         elif key == "in_sample_range":
-            out[key] = cut(value)
+            out[key] = _cut(value, calendar)
         else:
-            out[key] = [pair for pair in (cut(v) for v in value) if pair is not None]
+            out[key] = [pair for pair in (_cut(v, calendar) for v in value) if pair is not None]
     return out
+
+
+def cut_folds(folds: Sequence[Mapping] | None, timestamps) -> list[dict] | None:
+    """Return a ``run_cv()`` run's fold rows with their bars cut to the trader's.
+
+    ``traded`` and ``in_sample_range`` are narrowed to the trader's bars
+    (``None`` when none is left); the training window, a record of the
+    model, is kept. ``None`` (a run without folds) stays ``None``.
+
+    Parameters
+    ----------
+    folds : sequence of dict or None
+        ``QuantlabRun.report_records()["folds"]``.
+    timestamps : array_like of datetime64
+        The trader run's bars.
+
+    Returns
+    -------
+    list of dict or None
+        The rows, as quantlab's ``report_windows`` takes them.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-02", periods=4)
+    >>> folds = [{"fold": 0, "training_window": ["2023-01-03", "2023-12-29"],
+    ...           "traded": ("2023-12-27", "2024-01-03"), "in_sample_range": None}]
+    >>> cut_folds(folds, bars.values)[0]["traded"]
+    ('2024-01-02', '2024-01-03')
+    """
+    if folds is None:
+        return None
+    calendar = pd.DatetimeIndex(timestamps)
+    rows = []
+    for fold in folds:
+        traded = _cut(fold.get("traded"), calendar)
+        rows.append(
+            {
+                **fold,
+                "traded": None if traded is None else tuple(traded),
+                "in_sample_range": _cut(fold.get("in_sample_range"), calendar),
+            }
+        )
+    return rows
 
 
 def _fill_bar(decision_date, calendar: pd.DatetimeIndex) -> pd.Timestamp | None:
@@ -485,6 +558,7 @@ def _trader_facts(fills: xr.Dataset, events: Sequence[Mapping], cycles: Sequence
         facts[name] = {"count": 0, "amount": 0.0}
     facts["splits"] = {"count": 0, "share_change": 0}
     facts["implied_splits"] = {"count": 0, "share_change": 0}
+    facts["mismatches"] = {"count": 0}
     for event in events:
         if event.get("type") != "corporate_action":
             continue
@@ -498,6 +572,8 @@ def _trader_facts(fills: xr.Dataset, events: Sequence[Mapping], cycles: Sequence
             block["count"] += 1
             sign = 1 if event["side"] == "BUY" else -1
             block["share_change"] += sign * int(event["quantity"])
+        elif action == "MISMATCH":
+            facts["mismatches"]["count"] += 1
     cash = [c.equity * (1.0 - float(c.current_weights.sum())) for c in cycles]
     facts["peak_cash_debit"] = max(0.0, -min(cash)) if cash else 0.0
     return facts
@@ -523,65 +599,111 @@ def _portfolio_construction(events: Sequence[Mapping]) -> dict:
     return block
 
 
-@dataclass
-class _Trade:
-    """One position-level round trip: from flat to flat."""
+@dataclass(frozen=True)
+class _Executed:
+    """The run's executions on one split-adjusted basis, as quantlab's round trips take them."""
 
-    symbol: Hashable
-    entry: pd.Timestamp
-    exit: pd.Timestamp | None = None
+    fills: xr.Dataset
+    close: xr.DataArray
+    cash_flows: xr.Dataset
 
 
-def _trades(fills: xr.Dataset, events: Sequence[Mapping]) -> list[_Trade]:
-    """Position-level round trips of the strategy's fills, splits and delisting settlements."""
-    changes: list[tuple[pd.Timestamp, int, Hashable, int]] = []
-    for row in range(fills.sizes.get("fill", 0)):
-        changes.append(
-            (
-                pd.Timestamp(fills["timestamp"].values[row]),
-                1,
-                python_scalar(fills["symbol"].values[row]),
-                int(fills["size"].values[row]),
-            )
+def _executions(fills: xr.Dataset, events: Sequence[Mapping], closes: pd.DataFrame) -> _Executed:
+    """Restate the fills, cash flows and closes split-adjusted (module docstring).
+
+    ``closes`` are the raw closes on the run's bars by PERMNO. Symbols become
+    strings, as ``backtest_stats.round_trips`` labels them.
+    """
+    # (bar, order within the bar, PERMNO, kind, signed shares, price, fee):
+    # corporate actions act at 09:30, before the bar's next-open fills.
+    changes: list[tuple] = [
+        (
+            pd.Timestamp(fills["timestamp"].values[row]),
+            1,
+            python_scalar(fills["symbol"].values[row]),
+            "fill",
+            int(fills["size"].values[row]),
+            float(fills["price"].values[row]),
+            float(fills["fee"].values[row]),
         )
+        for row in range(fills.sizes.get("fill", 0))
+    ]
+    close = closes.astype(float)
+    flows: list[tuple] = []
     for event in events:
-        if event.get("type") == "corporate_action" and event.get("action") in ("SPLIT", "IMPLIED_SPLIT", "DELIST"):
+        if event.get("type") != "corporate_action":
+            continue
+        action, when, permno = event["action"], pd.Timestamp(event["timestamp"]), event["symbol"]
+        if action in ("SPLIT", "IMPLIED_SPLIT", "DELIST"):
             sign = 1 if event["side"] == "BUY" else -1
-            # Corporate actions act at the open, before the bar's own fills.
+            kind = "fill" if action == "DELIST" else "split"
             changes.append(
-                (pd.Timestamp(event["timestamp"]), 0, event["symbol"], sign * int(event["quantity"]))
+                (when, 0, permno, kind, sign * int(event["quantity"]), float(event["price"]), float(event["fee"]))
             )
-    changes.sort(key=lambda c: (c[0], c[1]))
-    positions: dict[Hashable, int] = {}
-    open_trades: dict[Hashable, _Trade] = {}
-    trades: list[_Trade] = []
-    for when, _, symbol, delta in changes:
-        before = positions.get(symbol, 0)
-        after = before + delta
-        positions[symbol] = after
-        if before != 0 and (after == 0 or np.sign(after) != np.sign(before)):
-            open_trades.pop(symbol).exit = when
-        if after != 0 and (before == 0 or np.sign(after) != np.sign(before)):
-            open_trades[symbol] = _Trade(symbol, when)
-            trades.append(open_trades[symbol])
-    return trades
+            if action == "DELIST":
+                position = close.index.searchsorted(when)
+                if position:  # marked at its last valuation on the delisting bar
+                    close.loc[close.index[position - 1], permno] = float(event["price"])
+        elif action in CASH_ACTIONS and event["amount"]:
+            flows.append((when, str(permno), float(event["amount"])))
+    changes.sort(key=lambda change: change[:2])
 
+    factors = pd.DataFrame(1.0, index=close.index, columns=close.columns)
+    held: dict[Hashable, int] = {}
+    rows: list[tuple] = []
+    for when, _, permno, kind, size, price, fee in changes:
+        before = held.get(permno, 0)
+        held[permno] = before + size
+        factor = float(factors.at[when, permno]) if permno in factors else 1.0
+        if kind == "fill":
+            rows.append((when, str(permno), size / factor, price * factor, fee))
+        elif held[permno] == 0:
+            # A reverse split that leaves no share: the trip ends here.
+            rows.append((when, str(permno), -before / factor, 0.0, 0.0))
+        else:
+            factors.loc[when:, permno] *= held[permno] / before
 
-def _trade_counts(trades: Sequence[_Trade], ranges) -> dict:
-    """quantlab's ``Total Closed Trades`` (exit inside ``ranges``) and ``Total Open Trades`` (open at each range's end)."""
-    closed = sum(
-        1
-        for trade in trades
-        if trade.exit is not None
-        and backtest_stats.in_ranges(np.array([trade.exit.to_datetime64()]), ranges)[0]
+    adjusted = close * factors
+    return _Executed(
+        fills=xr.Dataset(
+            {
+                "timestamp": ("fill", np.array([r[0] for r in rows], dtype="datetime64[ns]")),
+                "symbol": ("fill", np.array([r[1] for r in rows], dtype=str)),
+                "size": ("fill", np.array([r[2] for r in rows], dtype=float)),
+                "price": ("fill", np.array([r[3] for r in rows], dtype=float)),
+                "fees": ("fill", np.array([r[4] for r in rows], dtype=float)),
+            }
+        ),
+        close=xr.DataArray(
+            adjusted.to_numpy(dtype=float),
+            dims=("timestamp", "symbol"),
+            coords={
+                "timestamp": adjusted.index.values,
+                "symbol": np.array([str(c) for c in adjusted.columns], dtype=str),
+            },
+        ),
+        cash_flows=xr.Dataset(
+            {
+                "timestamp": ("flow", np.array([f[0] for f in flows], dtype="datetime64[ns]")),
+                "symbol": ("flow", np.array([f[1] for f in flows], dtype=str)),
+                "amount": ("flow", np.array([f[2] for f in flows], dtype=float)),
+            }
+        ),
     )
+
+
+def _trade_counts(trips: xr.Dataset, ranges) -> dict:
+    """quantlab's slice counts: round trips closed inside ``ranges`` and open at each range's end."""
+    if not trips.sizes.get("trade", 0):
+        return {"Total Closed Trades": 0, "Total Open Trades": 0}
+    closed = trips["status"].values.astype(str) == "Closed"
+    entry = trips["entry_timestamp"].values.astype("datetime64[ns]")
+    exit_ = trips["exit_timestamp"].values.astype("datetime64[ns]")
     open_count = 0
     for _, end in ranges:
-        end_ts = pd.Timestamp(backtest_stats.label_ns(end))
-        open_count += sum(
-            1
-            for trade in trades
-            if trade.entry <= end_ts and (trade.exit is None or trade.exit > end_ts)
-        )
-    return {"Total Closed Trades": closed, "Total Open Trades": open_count}
-
+        end_ts = backtest_stats.label_ns(end)
+        open_count += int(((entry <= end_ts) & (~closed | (exit_ > end_ts))).sum())
+    return {
+        "Total Closed Trades": int((closed & backtest_stats.in_ranges(exit_, ranges)).sum()),
+        "Total Open Trades": open_count,
+    }

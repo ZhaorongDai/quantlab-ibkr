@@ -248,7 +248,8 @@ class BacktestVenue(Venue):
         Returns
         -------
         VenueReport
-            The fills the fee model charged its minimum.
+            The fills the fee model charged its minimum, the fee model's
+            description and the slippage.
 
         Examples
         --------
@@ -296,4 +297,8 @@ class BacktestVenue(Venue):
             )
         finally:
             engine.dispose()
-        return VenueReport(minimum_fee_orders=frozenset(self.fee_model.minimum_fee_orders))
+        return VenueReport(
+            minimum_fee_orders=frozenset(self.fee_model.minimum_fee_orders),
+            fees=self.fee_model.description,
+            slippage=self.fill_model.slippage,
+        )

@@ -140,14 +140,24 @@ class VenueReport:
         minimum. Keyed by order because the backtest venue fills an order
         whole; a venue that fills in parts reports only orders whose every
         fill hit the minimum.
+    fees : str or None
+        The fee model the venue charged, as the report's Setup states it;
+        ``None`` when the venue does not say.
+    slippage : float or None
+        The fractional slippage the venue filled with; ``None`` when it does
+        not say.
 
     Examples
     --------
     >>> VenueReport().minimum_fee_orders
     frozenset()
+    >>> VenueReport(fees="0.001 of the traded notional", slippage=0.0).fees
+    '0.001 of the traded notional'
     """
 
     minimum_fee_orders: frozenset[str] = frozenset()
+    fees: str | None = None
+    slippage: float | None = None
 
 
 @dataclass(frozen=True)

@@ -59,6 +59,17 @@ class FractionFeeModel(FeeModel):
         self.rate = float(rate)
         self.minimum_fee_orders: set[str] = set()
 
+    @property
+    def description(self) -> str:
+        """The model as a run report's Setup states it.
+
+        Examples
+        --------
+        >>> FractionFeeModel(0.001).description
+        '0.001 of the traded notional'
+        """
+        return f"{self.rate:g} of the traded notional"
+
     def get_commission(self, order, fill_qty, fill_px, instrument) -> Money:
         """Return ``rate * fill_qty * fill_px`` in the instrument's quote currency.
 
@@ -125,6 +136,20 @@ class IbkrFixedFeeModel(FeeModel):
     def __init__(self):
         super().__init__()
         self.minimum_fee_orders: set[str] = set()
+
+    @property
+    def description(self) -> str:
+        """The model as a run report's Setup states it.
+
+        Examples
+        --------
+        >>> IbkrFixedFeeModel().description
+        'IBKR Pro Fixed: USD 0.005 per share, min USD 1.00, max 1% of value; SEC fee 0.0000206 of a sale'
+        """
+        return (
+            f"IBKR Pro Fixed: USD {self.PER_SHARE} per share, min USD {self.MINIMUM}, "
+            f"max {float(self.MAXIMUM_RATE * 100):g}% of value; SEC fee {self.SEC_FEE_RATE} of a sale"
+        )
 
     @classmethod
     def charge(cls, side: OrderSide, quantity: Decimal | int, price: Decimal) -> Decimal:

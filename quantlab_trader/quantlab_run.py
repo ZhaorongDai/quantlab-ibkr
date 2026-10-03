@@ -26,6 +26,7 @@ from quantlab.base.data import MarketDataset
 from quantlab.base.portfolio import PortfolioConstructor, PredictionPanel
 from quantlab.base.tracking import NullTracker, Tracker
 from quantlab.portfolio.prediction_panel import load_constructor
+from quantlab.utils import backtest_stats
 from quantlab.utils.module import get_cls_from_path, load_dataset_from_config
 
 #: The split keys of a quantlab run's ``metrics.json`` (``run()`` writes the
@@ -247,6 +248,56 @@ class QuantlabRun:
             "returns": returns,
             "symbol": info.get("symbol"),
             "axis_symbol": info.get("axis_symbol"),
+        }
+
+    def report_records(self) -> dict:
+        """Return what a trader run's report restates from this run's records.
+
+        Returns
+        -------
+        dict
+            ``folds``: one row per fold of a ``run_cv()`` run, in fold order,
+            as quantlab's ``report_windows`` takes them (``fold``,
+            ``training_window``, ``traded``: the ``bar_label`` of the fold's
+            first and last bar, ``in_sample_range``), else ``None``;
+            ``trained_checkpoint``: the checkpoint a train-mode run trained,
+            else ``None``; ``benchmark_source``: where the benchmark was read
+            from (its store, or the dataset held in memory), as quantlab's
+            Setup names it, else ``None``.
+
+        Examples
+        --------
+        ::
+
+            records = run.report_records()
+            windows = report_windows(timestamps, metrics, records["folds"])
+        """
+        path = self.run_dir / "metrics.json"
+        metrics = json.loads(path.read_text()) if path.is_file() else {}
+        folds = None
+        if isinstance(metrics.get("folds"), list):
+            folds = [
+                {
+                    "fold": fold["fold"],
+                    "training_window": fold["metrics"].get("training_window"),
+                    "traded": tuple(
+                        backtest_stats.bar_label(fold["metrics"]["whole"][key])
+                        for key in ("Start", "End")
+                    ),
+                    "in_sample_range": fold["metrics"].get("in_sample_range"),
+                }
+                for fold in metrics["folds"]
+            ]
+        benchmark = self.config.get("benchmark_dataset")
+        source = None
+        if isinstance(benchmark, dict):
+            source = benchmark.get("zarr_file_path") or (
+                f"the {str(benchmark.get('name', 'dataset')).rsplit('.', 1)[-1]} held in memory"
+            )
+        return {
+            "folds": folds,
+            "trained_checkpoint": metrics.get("trained_checkpoint"),
+            "benchmark_source": source,
         }
 
     def tracker(self) -> Tracker:
