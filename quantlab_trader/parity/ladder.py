@@ -232,11 +232,23 @@ def _resolved(execution: ExecutionConfig, run: QuantlabRun) -> ExecutionConfig:
 
 
 def _fingerprints_agree(recorded: dict | None, rerun: dict | None) -> bool | None:
-    """Whether L0 read the price data the run recorded (its digest); ``None`` without a record."""
-    common = sorted(set(recorded or {}) & set(rerun or {}))
-    if not common:
+    """Whether L0 read the data the run recorded; ``None`` when they share no request.
+
+    A quantlab data fingerprint maps a component path to one entry per
+    distinct request. The entries both sides hold (same key, same
+    ``request``) are compared by ``digest`` alone, as quantlab compares.
+    """
+    recorded, rerun = recorded or {}, rerun or {}
+    shared = [
+        (entry["digest"], other["digest"])
+        for key in sorted(set(recorded) & set(rerun))
+        for entry in recorded[key]
+        for other in rerun[key]
+        if entry["request"] == other["request"]
+    ]
+    if not shared:
         return None
-    return all(rerun[name].get("digest") == recorded[name].get("digest") for name in common)
+    return all(old == new for old, new in shared)
 
 
 def _trader_run(run: QuantlabRun, execution: ExecutionConfig, loop: Loop, output_dir: Path) -> Path:
