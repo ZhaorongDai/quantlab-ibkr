@@ -368,7 +368,8 @@ class QuantlabRun:
         quantlab's ``DecisionInputs.from_run``: the bound rule, the price
         dataset, the market columns, the rebalance period and the anchor (the
         prediction panel's first bar). ``end`` is the replay's last bar,
-        which never rebalances (the run's last bar by default). Refused (ADR
+        which never rebalances; ``None`` leaves the schedule open-ended, as a
+        live run's is, counting on past the run's last bar (ADR 0008). Refused (ADR
         0005, spec #18 stories 33-34) are a run whose valuation column is not
         an adjusted price (decision prices are adjusted, ADR 0002), a run
         without a prediction panel, and a rule that declares
