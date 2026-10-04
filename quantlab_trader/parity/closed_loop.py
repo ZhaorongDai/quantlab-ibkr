@@ -18,11 +18,11 @@ from quantlab_trader.quantlab_run import QuantlabRun
 
 #: Rules whose decision does not depend on holdings when nothing is locked
 #: and nothing holds (ADR 0007): TopN, and mean-variance without a turnover
-#: penalty; by class path, with the config test.
+#: penalty; by class path, with the test on the rebuilt rule.
 _HOLDING_INDEPENDENT_RULES = {
-    "quantlab.portfolio.predefined.top_n.TopNConstructor": lambda config: True,
-    "quantlab.portfolio.predefined.mean_variance.MeanVarianceOptimizer": lambda config: float(
-        config.get("turnover_penalty", 0.0)
+    "quantlab.portfolio.predefined.top_n.TopNConstructor": lambda rule: True,
+    "quantlab.portfolio.predefined.mean_variance.MeanVarianceOptimizer": lambda rule: float(
+        rule.config.turnover_penalty
     )
     == 0.0,
 }
@@ -36,7 +36,7 @@ def _locked(run: QuantlabRun, positions: pd.DataFrame, timestamps: pd.DatetimeIn
     dataset = run.price_dataset
     prices = dataset.panel(timestamps[0], timestamps[-1], symbols=list(held)).load()
     tradable = (
-        dataset.tradable_bars(prices, run.market["fill_price_column"])
+        dataset.tradable_bars(prices, run.market.fill_price_column)
         .transpose("timestamp", "symbol")
         .to_pandas()
         .reindex(index=timestamps, columns=held, fill_value=False)
@@ -75,9 +75,9 @@ def closed_vs_open(
         decided = decisions["weight"].transpose("timestamp", "symbol").load()
     events = json.loads((closed_dir / "events.json").read_text())["events"]
     held_bars = {pd.Timestamp(e["timestamp"]) for e in events if e.get("type") == "hold"}
-    constructor = run.config.get("constructor") or {}
-    is_independent_config = _HOLDING_INDEPENDENT_RULES.get(constructor.get("name"))
-    rule_independent = bool(is_independent_config and is_independent_config(constructor))
+    rule = run.constructor()
+    is_independent = None if rule is None else _HOLDING_INDEPENDENT_RULES.get(rule.import_path)
+    rule_independent = bool(is_independent and is_independent(rule))
 
     timestamps = market.timestamps
     table = table.to_pandas()
@@ -108,7 +108,7 @@ def closed_vs_open(
     )
     closed_row, open_row = statistics.row(closed), statistics.row(t_rung)
     return {
-        "rule": constructor.get("name"),
+        "rule": None if rule is None else rule.import_path,
         "holding_independent_rule": rule_independent,
         "rebalance_bars_compared": compared,
         "bars_equal": equal,

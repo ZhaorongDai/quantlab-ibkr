@@ -5,9 +5,8 @@
 ``open``/``high``/``low``/``close``, the adjusted ``adj*`` group, ``divCash``,
 ``splitFactor``, ``cumfacpr``, ``cumfacshr``) and backtests a given rebalance
 table on it with quantlab's ``WeightsVectorBt.run_weights``, which writes a
-real run directory (``config.json`` with its ``market`` block,
-``weights.zarr``, ``equity.zarr``, ...). Nothing here imports quantlab's
-``tests/``.
+real run directory (read through quantlab's ``BacktestRun``). Nothing here
+imports quantlab's ``tests/``.
 
 ``build_constructor_run`` builds a closed-loop run the way ADR 0007 has
 the parity fixtures built: a model-free ``PredictionPanel``, quantlab's
@@ -15,8 +14,8 @@ the parity fixtures built: a model-free ``PredictionPanel``, quantlab's
 backtester assembles: tradability, the rebalance schedule, the rule's
 ``history_bars`` price window, the delisting marks), ``run_weights`` of a
 ``CrossSectionBacktestConfig``
-carrying the rule (so ``config.json`` records it), and the panel written as
-the run's ``predictions.zarr``.
+carrying the rule (so the run's recipe records it), and the panel written
+where a run with a model keeps its prediction panel (``PREDICTION_PANEL``).
 
 ``build_quantlab_run(member=...)`` instead runs on a membership-masked
 derived store, the way quantlab's ``sp500_*`` examples build
@@ -52,6 +51,11 @@ from quantlab.base.tracking import Tracker
 from quantlab.dataset.crsp import CrspStockDataset
 from quantlab.dataset.stock import StockDataset
 from quantlab.portfolio.decision_inputs import DecisionInputs
+
+#: Where a quantlab run with a model keeps its prediction panel; the fixture
+#: writes one into a model-free run (the one place outside quantlab that names
+#: a run file, for a test stand-in only).
+PREDICTION_PANEL = "predictions.zarr"
 
 #: The adjusted group is the raw group times this, so a raw/adjusted mix-up
 #: changes every number a test checks.
@@ -288,5 +292,7 @@ def build_constructor_run(
         )
     )
     run_dir = Path(backtester.run_weights(weights).run_dir)
-    PredictionPanel(panel, labels).write(run_dir / PredictionPanel.FILE_NAME)
+    # A model-free stand-in for a run with a model: the panel goes where
+    # quantlab's BacktestRun.predictions reads a run's prediction panel.
+    PredictionPanel(panel, labels).write(run_dir / PREDICTION_PANEL)
     return run_dir, failed

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -16,7 +15,7 @@ from quantlab_trader.decision import (
     TableTargets,
     TargetSource,
 )
-from quantlab_trader.outputs import RunRecorder
+from quantlab_trader.outputs import RunRecorder, report_path, read_config
 from quantlab_trader.quantlab_run import QuantlabRun
 from quantlab_trader.strategy import PortfolioStrategy
 
@@ -31,13 +30,13 @@ def run(config: TraderConfig) -> Path:
     Closed loop (ADR 0001, 0008) rebuilds the run's decision inputs
     (quantlab's ``DecisionInputs``) and decides every rebalance bar on the
     account's holdings with the run's prediction panel; open loop executes
-    the run's ``weights.zarr``.
+    the run's rebalance table.
 
     The run is tracked through ``config.tracker``, or the quantlab run's own
     tracker (``NullTracker`` when it had none), in the quantlab run's
     project (``{Backtester}_backtest`` unless the tracker sets its own): one
-    tracking run named as the run directory, whose config gains the
-    resolved records of ``config.json`` and whose summary holds the metric
+    tracking run named as the run directory, whose config gains the trader
+    run's config (``outputs.read_config``) and whose summary holds the metric
     blocks of ``TRACKED_BLOCKS`` and which carries ``report.html``. A run
     that raises is finished as failed.
 
@@ -63,10 +62,11 @@ def run(config: TraderConfig) -> Path:
     Replaying a quantlab run on the backtest venue, closed loop::
 
         from quantlab_trader.base.config import TraderConfig
+        from quantlab_trader.outputs import read_metrics
         from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
 
         run_dir = run(TraderConfig("runs/WeightsVectorBt_20261001", BacktestVenueConfig()))
-        json.loads((run_dir / "metrics.json").read_text())["whole"]["Total Return [%]"]
+        read_metrics(run_dir)["whole"]["Total Return [%]"]
     """
     quantlab_run = QuantlabRun.load(config.quantlab_run)
     start, end = _window(config, quantlab_run)
@@ -87,7 +87,7 @@ def run(config: TraderConfig) -> Path:
         config=config.get_config(),
     ) as tracking:
         run_dir = recorder.write(venue.run(strategy))
-        tracking.update_config(json.loads((run_dir / "config.json").read_text()))
+        tracking.update_config(read_config(run_dir))
         tracking.summarize(
             {
                 block: recorder.metrics[block]
@@ -95,7 +95,7 @@ def run(config: TraderConfig) -> Path:
                 if recorder.metrics.get(block) is not None
             }
         )
-        tracking.log_file(run_dir / "report.html")
+        tracking.log_file(report_path(run_dir))
     return run_dir
 
 

@@ -1,20 +1,17 @@
-"""``QuantlabRun``: the only reader of a quantlab run directory.
+"""``QuantlabRun``: the run trader executes, read through quantlab's ``BacktestRun``.
 
-A quantlab run directory holds the backtest's ``config.json`` (the price
-dataset's config, the window, costs and the ``market`` block naming the fill
-and valuation price columns) and its outputs, among them the rebalance table
-``weights.zarr``, its ``metrics.json`` (the in-sample and out-of-sample
-ranges a trader run's metrics are split by), ``equity.zarr`` (the
-benchmark's curve, when the run had one) and, for a run with a model, its prediction panel
-``predictions.zarr``, from which quantlab's ``DecisionInputs.from_run``
-rebuilds the run's decision inputs, its bound rule included. trader learns everything about
-the run here, without importing quantlab's backtest layer (which loads
-vectorbt).
+A quantlab backtest run directory is read only through quantlab's
+``quantlab.runs.backtest_run.BacktestRun`` (quantlab ADR 0020): its window,
+market columns, annualization, execution settings, rebalance period,
+initial cash and data fingerprint as typed values; its rebalance table,
+prediction panel, metrics and equity curve as loaded objects; its price
+dataset, rule and tracker rebuilt from its recipe. trader names no file of
+the run and indexes no key of its config, and learns everything without
+importing quantlab's backtest layer (which loads vectorbt).
 """
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Self
@@ -23,15 +20,15 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.base.data import MarketDataset
-from quantlab.base.portfolio import PredictionPanel
+from quantlab.base.portfolio import PortfolioConstructor, PredictionPanel
 from quantlab.base.tracking import NullTracker, Tracker
 from quantlab.portfolio.decision_inputs import DecisionInputs
+from quantlab.runs.backtest_run import BacktestRun, Market
 from quantlab.utils import backtest_stats
-from quantlab.utils.module import get_cls_from_path, load_dataset_from_config
 
-#: The split keys of a quantlab run's ``metrics.json`` (``run()`` writes the
-#: singular ``in_sample_range`` and ``training_window``, a ``run_cv()`` run the
-#: plural ones under ``stitched``); a ``run_weights()`` run has none.
+#: The split keys of a quantlab run's metrics (``run()`` records the singular
+#: ``in_sample_range`` and ``training_window``, a ``run_cv()`` run the plural
+#: ones under ``stitched``); a ``run_weights()`` run has none.
 SPLIT_KEYS: tuple[str, ...] = (
     "training_window",
     "training_windows",
@@ -39,11 +36,6 @@ SPLIT_KEYS: tuple[str, ...] = (
     "in_sample_ranges",
     "out_of_sample_ranges",
 )
-
-#: The US-equity annualization quantlab's ``US_EQUITY_MARKET`` uses, for a run
-#: whose config does not record its own (only a weights config does).
-US_EQUITY_TRADING_DAYS = 252
-US_EQUITY_SESSION_MINUTES = 390
 
 #: Price variables trader cannot execute without: the raw open (fills) and
 #: close (sizing and the equity mark), the adjusted close (decision prices,
@@ -71,17 +63,17 @@ class QuantlabRun:
     ----------
     run_dir : pathlib.Path
         The run directory, absolute.
-    config : dict
-        Its ``config.json``.
+    backtest_run : quantlab.runs.backtest_run.BacktestRun
+        The run, as quantlab reads it.
     price_dataset : quantlab.base.data.MarketDataset
-        The run's price dataset, rebuilt from its config.
-    market : dict
-        The ``market`` block: ``fill_price_column`` and
-        ``valuation_price_column``, the run's (adjusted) decision columns.
+        The run's price dataset, rebuilt from its recipe.
+    market : quantlab.runs.backtest_run.Market
+        ``fill_price_column`` and ``valuation_price_column``, the run's
+        (adjusted) decision columns.
     rebalance_periods : int
         Bars between rebalances.
     window : tuple of pandas.Timestamp
-        The run's first and last bar dates (``start_date``, ``end_date``).
+        The run's first and last bar.
     init_cash : float
         The run's starting cash.
     fees : float
@@ -91,7 +83,7 @@ class QuantlabRun:
     data_fingerprint : dict or None
         The run's record of the data it read, for a trader run's config.
     trading_days_per_year, session_minutes_per_day : int
-        The run's annualization: its config's, or US equity's (252, 390).
+        The run's annualization.
 
     Examples
     --------
@@ -99,22 +91,22 @@ class QuantlabRun:
     decision column and window::
 
         run = QuantlabRun.load("runs/WeightsVectorBt_20261001")
-        valuation_column = run.market["valuation_price_column"]
+        valuation_column = run.market.valuation_price_column
         start, end = run.window
     """
 
     run_dir: Path
-    config: dict
+    backtest_run: BacktestRun
     price_dataset: MarketDataset
-    market: dict
+    market: Market
     rebalance_periods: int
     window: tuple[pd.Timestamp, pd.Timestamp]
     init_cash: float
     fees: float
     slippage: float
     data_fingerprint: dict | None
-    trading_days_per_year: int = US_EQUITY_TRADING_DAYS
-    session_minutes_per_day: int = US_EQUITY_SESSION_MINUTES
+    trading_days_per_year: int
+    session_minutes_per_day: int
 
     @classmethod
     def load(cls, run_dir: str | Path) -> Self:
@@ -132,40 +124,34 @@ class QuantlabRun:
         Raises
         ------
         ValueError
-            If ``run_dir`` has no ``config.json``, it has no ``market`` block, the price dataset is
-            not a ``MarketDataset``, or its store lacks any of
-            ``REQUIRED_PRICE_VARIABLES``, as a membership-masked derived
-            store does (ADR 0006).
+            If ``run_dir`` is not a quantlab backtest run quantlab can read,
+            the price dataset is not a ``MarketDataset``, or its store lacks
+            any of ``REQUIRED_PRICE_VARIABLES``, as a membership-masked
+            derived store does (ADR 0006).
 
         Examples
         --------
         >>> QuantlabRun.load("no/such/run")
         Traceback (most recent call last):
         ...
-        ValueError: ... is not a quantlab run directory: no config.json
+        ValueError: ... is not a quantlab run directory: ...
 
         A run directory written by quantlab's backtester::
 
             run = QuantlabRun.load("runs/WeightsVectorBt_20261001")
         """
         run_dir = Path(run_dir).resolve()
-        if not (run_dir / "config.json").is_file():
-            raise ValueError(f"{run_dir} is not a quantlab run directory: no config.json")
-        config = json.loads((run_dir / "config.json").read_text())
-        market = config.get("market")
-        if not market:
-            raise ValueError(
-                f"quantlab run {run_dir}: config.json has no market block "
-                f"(fill_price_column, valuation_price_column); rerun it with a "
-                f"quantlab that writes one (quantlab #106)"
-            )
-        dataset = load_dataset_from_config(config["price_dataset"], run_dir=run_dir)
+        try:
+            backtest_run = BacktestRun.open(run_dir)
+        except (FileNotFoundError, ValueError) as error:
+            raise ValueError(f"{run_dir} is not a quantlab run directory: {error}") from error
+        dataset = backtest_run.rebuild("price_dataset")
         if not isinstance(dataset, MarketDataset):
             raise ValueError(
                 f"quantlab run {run_dir}: the price dataset "
                 f"{type(dataset).__name__} is not a MarketDataset"
             )
-        window = (pd.Timestamp(config["start_date"]), pd.Timestamp(config["end_date"]))
+        window = tuple(pd.Timestamp(bar) for bar in backtest_run.window)
         variables = set(dataset.panel(*window).data_vars)
         missing = [name for name in REQUIRED_PRICE_VARIABLES if name not in variables]
         if missing:
@@ -178,32 +164,28 @@ class QuantlabRun:
                 f"and splitFactor, cumfacshr and divCash to book corporate actions "
                 f"from (ADR 0009)"
             )
+        execution = backtest_run.execution
         return cls(
             run_dir=run_dir,
-            config=config,
+            backtest_run=backtest_run,
             price_dataset=dataset,
-            market=dict(market),
-            rebalance_periods=int(config["rebalance_periods"]),
+            market=backtest_run.market,
+            rebalance_periods=backtest_run.rebalance_periods,
             window=window,
-            init_cash=float(config["init_cash"]),
-            fees=float(config["fees"]),
-            slippage=float(config["slippage"]),
-            data_fingerprint=config.get("data_fingerprint"),
-            trading_days_per_year=int(
-                config.get("trading_days_per_year") or US_EQUITY_TRADING_DAYS
-            ),
-            session_minutes_per_day=int(
-                config.get("session_minutes_per_day") or US_EQUITY_SESSION_MINUTES
-            ),
+            init_cash=backtest_run.init_cash,
+            fees=float(execution.fees),
+            slippage=float(execution.slippage),
+            data_fingerprint=backtest_run.data_fingerprint or None,
+            trading_days_per_year=backtest_run.annualization.trading_days_per_year,
+            session_minutes_per_day=backtest_run.annualization.session_minutes_per_day,
         )
 
     def split(self) -> dict:
-        """Return the run's in-sample/out-of-sample split, as its ``metrics.json`` records it.
+        """Return the run's in-sample/out-of-sample split, as its metrics record it.
 
         The ``SPLIT_KEYS`` present at the level that carries them (the
         top level of a ``run()`` run, ``stitched`` of a ``run_cv()`` run);
-        empty for a run without a model (``run_weights()``) or without a
-        ``metrics.json``.
+        empty for a run without a model (``run_weights()``).
 
         Examples
         --------
@@ -213,10 +195,7 @@ class QuantlabRun:
             split = QuantlabRun.load("runs/XGBoostVectorBt_20261001").split()
             training_window = split["training_window"]
         """
-        path = self.run_dir / "metrics.json"
-        if not path.is_file():
-            return {}
-        metrics = json.loads(path.read_text())
+        metrics = self.backtest_run.metrics()
         level = metrics.get("stitched", metrics)
         return {key: level[key] for key in SPLIT_KEYS if key in level}
 
@@ -227,8 +206,8 @@ class QuantlabRun:
         -------
         dict or None
             ``returns``: the benchmark's per-bar returns on the run's bars
-            (``equity.zarr``'s ``benchmark_returns``); ``symbol`` and
-            ``axis_symbol``: its names from ``metrics.json``.
+            (its equity curve's ``benchmark_returns``); ``symbol`` and
+            ``axis_symbol``: its names from the run's metrics.
 
         Examples
         --------
@@ -237,18 +216,27 @@ class QuantlabRun:
             benchmark = run.benchmark()
             returns = None if benchmark is None else benchmark["returns"]
         """
-        with xr.open_zarr(self.run_dir / "equity.zarr") as equity:
-            if "benchmark_returns" not in equity:
-                return None
-            returns = equity["benchmark_returns"].load()
-        path = self.run_dir / "metrics.json"
-        metrics = json.loads(path.read_text()) if path.is_file() else {}
+        equity = self.backtest_run.equity()
+        if "benchmark_returns" not in equity:
+            return None
+        metrics = self.backtest_run.metrics()
         info = metrics.get("stitched", metrics).get("benchmark") or {}
         return {
-            "returns": returns,
+            "returns": equity["benchmark_returns"],
             "symbol": info.get("symbol"),
             "axis_symbol": info.get("axis_symbol"),
         }
+
+    def equity(self) -> xr.Dataset:
+        """Return the run's equity curve: ``value`` and ``returns`` on ``timestamp``.
+
+        Examples
+        --------
+        ::
+
+            run_value = run.equity()["value"]
+        """
+        return self.backtest_run.equity()
 
     def report_records(self) -> dict:
         """Return what a trader run's report restates from this run's records.
@@ -256,14 +244,16 @@ class QuantlabRun:
         Returns
         -------
         dict
-            ``folds``: one row per fold of a ``run_cv()`` run, in fold order,
-            as quantlab's ``report_windows`` takes them (``fold``,
-            ``training_window``, ``traded``: the ``bar_label`` of the fold's
-            first and last bar, ``in_sample_range``), else ``None``;
-            ``trained_checkpoint``: the checkpoint a train-mode run trained,
-            else ``None``; ``benchmark_source``: where the benchmark was read
-            from (its store, or the dataset held in memory), as quantlab's
-            Setup names it, else ``None``.
+            ``recipe``: the run's recipe, the config mapping quantlab's
+            ``report_summary`` reads; ``folds``: one row per fold of a
+            ``run_cv()`` run, in fold order, as quantlab's
+            ``report_windows`` takes them (``fold``, ``training_window``,
+            ``traded``: the ``bar_label`` of the fold's first and last bar,
+            ``in_sample_range``), else ``None``; ``trained_checkpoint``: the
+            checkpoint a train-mode run trained, else ``None``;
+            ``benchmark_source``: where the benchmark was read from (its
+            store, or the dataset held in memory), as quantlab's Setup names
+            it, else ``None``.
 
         Examples
         --------
@@ -272,8 +262,7 @@ class QuantlabRun:
             records = run.report_records()
             windows = report_windows(timestamps, metrics, records["folds"])
         """
-        path = self.run_dir / "metrics.json"
-        metrics = json.loads(path.read_text()) if path.is_file() else {}
+        metrics = self.backtest_run.metrics()
         folds = None
         if isinstance(metrics.get("folds"), list):
             folds = [
@@ -288,25 +277,15 @@ class QuantlabRun:
                 }
                 for fold in metrics["folds"]
             ]
-        benchmark = self.config.get("benchmark_dataset")
-        source = None
-        if isinstance(benchmark, dict):
-            # quantlab names the store a dataset read; one it held in memory
-            # is recorded reading inputs/ of the run directory, a relative path.
-            path = benchmark.get("zarr_file_path")
-            source = (
-                path
-                if path and Path(path).is_absolute()
-                else f"the {str(benchmark.get('name', 'dataset')).rsplit('.', 1)[-1]} held in memory"
-            )
         return {
+            "recipe": self.backtest_run.recipe(),
             "folds": folds,
             "trained_checkpoint": metrics.get("trained_checkpoint"),
-            "benchmark_source": source,
+            "benchmark_source": self.backtest_run.benchmark_source,
         }
 
     def tracker(self) -> Tracker:
-        """Return the run's tracker, rebuilt from ``config.json``; ``NullTracker`` without one.
+        """Return the run's tracker, rebuilt from its recipe; ``NullTracker`` without one.
 
         Examples
         --------
@@ -315,15 +294,22 @@ class QuantlabRun:
 
             tracker = config.tracker or run.tracker()
         """
-        recorded = self.config.get("tracker")
-        if not recorded:
-            return NullTracker()
-        cls = get_cls_from_path(recorded["name"])
-        return cls.from_config(recorded)
+        return self.backtest_run.rebuild("tracker") or NullTracker()
+
+    def constructor(self) -> PortfolioConstructor | None:
+        """Return the run's portfolio construction rule, rebuilt; ``None`` without one.
+
+        Examples
+        --------
+        ::
+
+            rule = run.constructor()
+        """
+        return self.backtest_run.rebuild("constructor")
 
     @property
     def backtester_class(self) -> str:
-        """The class name of the run's backtester, from ``config.json``'s ``name``.
+        """The class name of the run's backtester.
 
         Examples
         --------
@@ -331,10 +317,10 @@ class QuantlabRun:
 
             project = f"{run.backtester_class}_backtest"
         """
-        return str(self.config.get("name", "quantlab")).rsplit(".", 1)[-1]
+        return self.backtest_run.backtester_class.rsplit(".", 1)[-1]
 
     def rebalance_table(self) -> xr.Dataset:
-        """Return the run's ``weights.zarr``: ``weight`` on ``(timestamp, symbol)``, loaded.
+        """Return the run's rebalance table: ``weight`` on ``(timestamp, symbol)``, loaded.
 
         Examples
         --------
@@ -342,17 +328,28 @@ class QuantlabRun:
 
             table = run.rebalance_table()["weight"].transpose("timestamp", "symbol").to_pandas()
         """
-        with xr.open_zarr(self.run_dir / "weights.zarr") as table:
-            return table.load()
+        return self.backtest_run.weights()
+
+    @property
+    def has_prediction_panel(self) -> bool:
+        """Whether the run has a prediction panel (a run with a model).
+
+        Examples
+        --------
+        ::
+
+            loop = Loop.CLOSED if run.has_prediction_panel else Loop.OPEN
+        """
+        return self.backtest_run.has_predictions
 
     def prediction_panel(self) -> PredictionPanel:
-        """Return the run's prediction panel, ``predictions.zarr``, loaded.
+        """Return the run's prediction panel, loaded.
 
         Raises
         ------
         ValueError
-            If the run has no ``predictions.zarr`` (a ``run_weights()`` run
-            has no model and so no panel).
+            If the run has no prediction panel (a ``run_weights()`` run has
+            no model and so no panel).
 
         Examples
         --------
@@ -360,7 +357,17 @@ class QuantlabRun:
 
             predictions = run.prediction_panel().predictions
         """
-        return PredictionPanel.read(self._require_prediction_panel())
+        self._require_prediction_panel()
+        return self.backtest_run.predictions()
+
+    def _require_prediction_panel(self) -> None:
+        """Refuse a run without a prediction panel, without reading the panel."""
+        if not self.has_prediction_panel:
+            raise ValueError(
+                f"quantlab run {self.run_dir} has no prediction panel; a closed-loop "
+                f"replay needs the prediction panel of a run with a model (run() or "
+                f"run_cv()); replay a run_weights() run with loop='open'"
+            )
 
     def decision_inputs(self, end: pd.Timestamp | None = None) -> DecisionInputs:
         """Return the run's decision inputs, its rule bound to its label specs.
@@ -387,7 +394,7 @@ class QuantlabRun:
 
             targets = ConstructorTargets(run.decision_inputs(end))
         """
-        valuation = self.market["valuation_price_column"]
+        valuation = self.market.valuation_price_column
         if not valuation.startswith("adj"):
             raise ValueError(
                 f"quantlab run {self.run_dir}: its valuation column {valuation!r} is not "
@@ -404,15 +411,3 @@ class QuantlabRun:
                 f"replay such a rule closed-loop"
             )
         return inputs
-
-    def _require_prediction_panel(self) -> Path:
-        """Return the path of ``predictions.zarr``, refusing a run without one."""
-        path = self.run_dir / PredictionPanel.FILE_NAME
-        if not path.exists():
-            raise ValueError(
-                f"quantlab run {self.run_dir} has no {PredictionPanel.FILE_NAME}; a "
-                f"closed-loop replay needs the prediction panel of a run with a "
-                f"model (run() or run_cv()); replay a run_weights() run with "
-                f"loop='open'"
-            )
-        return path

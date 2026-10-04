@@ -1,20 +1,18 @@
-"""L0 and L1: the run's ``weights.zarr`` re-run through quantlab's own engine.
+"""L0 and L1: the run's rebalance table re-run through quantlab's own engine.
 
 trader never re-implements vectorbt's sizing, rejections or settlements:
-the backtester is rebuilt from the run's ``config.json`` by class path
-(which loads quantlab's backtest layer, allowed in this package only, ADR
-0008) and asked for ``run_weights``.
+the backtester is rebuilt from the run with quantlab's
+``BacktestRun.rebuild_backtester`` (which loads quantlab's backtest layer,
+allowed in this package only, ADR 0008) and asked for ``run_weights``.
 """
 
 from __future__ import annotations
-
-import copy
 
 import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.utils.module import load_backtester_from_config
+from quantlab.base.tracking import NullTracker
 from quantlab_trader.parity.market import Market, ffill, shift
 from quantlab_trader.parity.rung import RungResult
 from quantlab_trader.parity.vectorbt_ledger import VBT_ABS, VBT_REL
@@ -24,11 +22,12 @@ from quantlab_trader.quantlab_run import QuantlabRun
 def quantlab_rung(
     run: QuantlabRun, table: xr.DataArray, market: Market, sizing_basis: str, name: str
 ) -> tuple[RungResult, dict | None]:
-    """Re-run the run's ``weights.zarr`` through quantlab's engine; return the rung and fingerprint.
+    """Re-run the run's rebalance table through quantlab's engine; return the rung and fingerprint.
 
-    The backtester is rebuilt from ``config.json`` without its model,
-    tracker, benchmark and output directory (``run_weights`` reads none of
-    them), on the rebalance table's window, with ``sizing_basis``.
+    The backtester is rebuilt from the run without its model, tracker,
+    benchmark and output directory (``run_weights`` reads none of them), on
+    the rebalance table's window, with ``sizing_basis``; the fingerprint is
+    the data the re-run read.
 
     Examples
     --------
@@ -41,20 +40,18 @@ def quantlab_rung(
         l1, _ = quantlab_rung(run, table, market, "valuation", "L1")
         l1.buys_capped <= l0.buys_capped + len(l1.orders)
     """
-    config = copy.deepcopy(run.config)
     timestamps = market.timestamps
-    config.update(
+    backtester = run.backtest_run.rebuild_backtester(
         model=None,
         model_mode=None,
         checkpoint=None,
         output_dir=None,
         benchmark_dataset=None,
-        tracker={"project": None, "name": "quantlab.base.tracking.NullTracker"},
+        tracker=NullTracker(),
         sizing_basis=sizing_basis,
         start_date=timestamps[0].strftime("%Y-%m-%d"),
         end_date=timestamps[-1].strftime("%Y-%m-%d"),
     )
-    backtester = load_backtester_from_config(config, run_dir=run.run_dir)
     simulation = backtester.run_weights(table).simulation
     equity = simulation.value.to_pandas().reindex(timestamps)
 
@@ -113,7 +110,7 @@ def quantlab_rung(
         peak_cash_debit=max(0.0, -float(np.min(cash))),
         positions=pd.DataFrame(position, index=timestamps, columns=pd.Index(market.symbols)),
     )
-    return rung, backtester.get_config().get("data_fingerprint")
+    return rung, backtester.data_fingerprint or None
 
 
 def _capped_buys(market, run, sizing_basis, position, cash, bars, cols, signed) -> int:

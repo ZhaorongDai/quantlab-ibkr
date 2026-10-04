@@ -1,6 +1,7 @@
-"""trader imports an exact allowlist of quantlab modules (ADR 0008).
+"""trader imports an exact allowlist of quantlab modules (ADR 0008) and reads quantlab
+runs only through quantlab's ``BacktestRun``.
 
-Two locks:
+Three locks:
 
 - an ``ast`` scan of every trader module: each ``import`` of quantlab names a
   module on ``ALLOWED`` (or a name inside one); the modules of the
@@ -13,11 +14,19 @@ Two locks:
   command line imported (it imports the ``parity`` package only inside the
   ``parity`` command), and no module of the ``parity`` package either. The
   rule's, dataset's and tracker's modules may still load by class path from
-  ``config.json``.
+  the run's recipe;
+- a source scan of every trader module: no string literal names a file of a
+  quantlab run directory (``config.json``, ``run.json``, ``metrics.json``,
+  ``weights.zarr``, ``equity.zarr``, ``settlements.json``, ``predictions.zarr``,
+  ``report.html``, ``inputs/...``), and no run config is indexed by key
+  (``.config[...]`` / ``.config.get(...)`` on a run, or ``config["market"]``-style
+  reads), outside ``outputs.py``, which owns trader's own run directory and its
+  files of the same names (quantlab ADR 0020).
 """
 
 import ast
 import json
+import re
 import subprocess
 import sys
 import textwrap
@@ -42,6 +51,7 @@ PACKAGE = Path(__file__).resolve().parents[1] / "quantlab_trader"
 ALLOWED = {
     "quantlab.base.portfolio",
     "quantlab.portfolio.decision_inputs",
+    "quantlab.runs.backtest_run",
     "quantlab.base.data",
     "quantlab.utils.module",
     "quantlab.base.tracking",
@@ -212,3 +222,55 @@ def test_trader_assembles_no_decision_inputs_of_its_own():
     assert not (PACKAGE / "calendar.py").exists()
     assert defined & retired == set()
     assert "DecisionInputs" in imported
+
+
+#: The files of a quantlab run directory; trader reads them through ``BacktestRun``.
+_RUN_FILES = (
+    "config.json", "run.json", "metrics.json", "weights.zarr", "equity.zarr",
+    "settlements.json", "predictions.zarr", "report.html", "fingerprint.json",
+)
+_RUN_FILE = re.compile(
+    r"""["'](?:(?:[^"'\n]*/)?(?:%s)|inputs/[^"'\n]*)["']""" % "|".join(map(re.escape, _RUN_FILES))
+)
+_KEY_READ = re.compile(
+    r"\b\w*run\w*\.config\s*(?:\[|\.get\()|\bconfig\s*\[\s*[\"'](?:market|data_fingerprint|price_dataset|"
+    r"benchmark_dataset|constructor|tracker|start_date|end_date|init_cash|fees|slippage|rebalance_periods)[\"']"
+)
+#: trader's own run directory writes files of the same names, named only here.
+_OWNER = PACKAGE / "outputs.py"
+
+
+def _scan_offences(sources) -> list[str]:
+    return [
+        f"{name}:{number}: {line.strip()}"
+        for name, lines in sources
+        for number, line in enumerate(lines, start=1)
+        if _RUN_FILE.search(line) or _KEY_READ.search(line)
+    ]
+
+
+def test_trader_names_no_quantlab_run_file_and_indexes_no_run_config():
+    sources = [
+        (str(path.relative_to(PACKAGE)), path.read_text().splitlines())
+        for path in sorted(PACKAGE.rglob("*.py"))
+        if path != _OWNER
+    ]
+    assert len(sources) > 10
+
+    assert _scan_offences(sources) == []
+
+
+def test_the_scan_catches_what_it_locks():
+    caught = _scan_offences([("x.py", [
+        'config = json.loads((run_dir / "config.json").read_text())',
+        'table = xr.open_zarr(run.run_dir / "weights.zarr")',
+        'path = run_dir / "inputs/price_dataset.zarr"',
+        'market = config["market"]',
+        'rule = run.config.get("constructor")',
+    ])])
+    assert len(caught) == 5
+    assert _scan_offences([("x.py", [
+        "table = run.rebalance_table()",
+        "market = run.market.valuation_price_column",
+        'raise ValueError(f"{run_dir} has no config.json")',
+    ])]) == []

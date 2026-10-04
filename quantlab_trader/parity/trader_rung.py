@@ -10,6 +10,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab_trader.metrics import UNFILLED_STATUSES
+from quantlab_trader.outputs import read_equity, read_metrics
 from quantlab_trader.parity.market import Market
 from quantlab_trader.parity.rung import RungResult
 from quantlab_trader.venue.backtest.venue import ExecutionConfig
@@ -32,11 +33,10 @@ def trader_rung(
         t.peak_cash_debit
     """
     timestamps = market.timestamps
-    with xr.open_zarr(trader_dir / "equity.zarr") as equity:
-        value = equity["value"].to_pandas().reindex(timestamps)
+    value = read_equity(trader_dir)["value"].to_pandas().reindex(timestamps)
     with xr.open_zarr(trader_dir / "orders.zarr") as frame:
         table = frame.load().to_dataframe()
-    metrics = json.loads((trader_dir / "metrics.json").read_text())
+    metrics = read_metrics(trader_dir)
     events = json.loads((trader_dir / "events.json").read_text())["events"]
     fill_position = timestamps.searchsorted(pd.DatetimeIndex(table["decision_date"]), side="right")
     has_fill_bar = fill_position < len(timestamps)

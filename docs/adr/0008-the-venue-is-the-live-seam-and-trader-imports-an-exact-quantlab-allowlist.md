@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, amended 2026-10-04 (quantlab ADR 0020)
 date: 2026-10-01
 ---
 
@@ -129,3 +129,18 @@ quantlab bounds every decision to the rule's last `history_bars` raw prices, for
 that window, so a decision no longer depends on where the history starts, and the replay keeps no
 history of its own. The rebalance anchor is still the run's (the prediction panel's first bar),
 and the replay's last bar still never rebalances (`end`).
+
+## Amendment (2026-10-04, quantlab ADR 0020)
+
+trader reads a quantlab run only through quantlab's `quantlab.runs.backtest_run.BacktestRun`,
+which joins the allowlist: the window, market columns, annualization, execution settings,
+rebalance period, initial cash and data fingerprint as typed values; the rebalance table,
+prediction panel, metrics and equity curve as loaded objects; the price dataset, rule and tracker
+rebuilt from the run's recipe (`rebuild(field)`). The `market` block and the data fingerprint live
+in the run's `run.json`, not its `config.json`. The parity rung rebuilds the backtester with
+`rebuild_backtester(**overrides)` instead of editing a config dict. trader names no file of a
+quantlab run and indexes no key of its config; `tests/test_quantlab_boundary.py` adds a source scan
+for both, outside `outputs.py`, which owns trader's own run directory and its files of the same
+names. A run's window is its first and last simulated bar, so a replay window narrowed by
+`start`/`end` must lie within the bars the run simulated. `quantlab.utils.module` stays on the allowlist for `get_cls_from_path` (a tracker named in
+a trader config).

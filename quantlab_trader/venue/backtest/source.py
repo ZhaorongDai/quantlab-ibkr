@@ -83,7 +83,7 @@ class BacktestDecisionSource(DecisionSource):
         start, end, permnos = request.start, request.end, request.permnos
         predictions = request.predictions
         dataset = run.price_dataset
-        valuation_column = run.market["valuation_price_column"]
+        valuation_column = run.market.valuation_price_column
         prices = dataset.panel(start, end, symbols=list(permnos)).load()
         self.prices = prices
         self._calendar = pd.DatetimeIndex(prices["timestamp"].values)

@@ -72,7 +72,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     >>> import contextlib, io
     >>> with contextlib.redirect_stderr(io.StringIO()) as stderr:
     ...     status = main(["backtest", "--quantlab-run", "no/such/run"])
-    >>> status, stderr.getvalue().strip().endswith("is not a quantlab run directory: no config.json")
+    >>> status, "is not a quantlab run directory" in stderr.getvalue()
     (1, True)
 
     From the shell, ``quantlab-trader`` runs ``main`` and prints the trader

@@ -74,7 +74,7 @@ class Market:
             .load()
             .reindex(timestamp=timestamps, symbol=symbols)
         )
-        valuation_column = run.market["valuation_price_column"]
+        valuation_column = run.market.valuation_price_column
 
         def array(name):
             return np.asarray(
@@ -85,7 +85,7 @@ class Market:
             timestamps=timestamps,
             symbols=symbols,
             weights=np.asarray(table.values, dtype=np.float64),
-            fill=array(run.market["fill_price_column"]),
+            fill=array(run.market.fill_price_column),
             valuation=array(valuation_column),
             open=array("open"),
             close=array("close"),

@@ -69,9 +69,6 @@ import dataclasses
 import shutil
 from pathlib import Path
 
-import xarray as xr
-
-from quantlab.base.portfolio import PredictionPanel
 from quantlab.base.tracking import NullTracker
 from quantlab_trader import runner
 from quantlab_trader.base.config import TraderConfig
@@ -189,8 +186,7 @@ def _ladder_end(run, table, market, rungs, execution, partial: Path, parity_dir:
     """
     trader_dir = _trader_run(run, execution, Loop.OPEN, partial / "trader")
     rungs["T"] = trader_rung(trader_dir, market, execution)
-    with xr.open_zarr(run.run_dir / "equity.zarr") as recorded:
-        run_value = recorded["value"].load()
+    run_value = run.equity()["value"]
     checks = {
         "L0_equals_run": l0_check(rungs["L0"], run_value),
         "T_equals_L5": t_check(rungs["T"], rungs["L5"], trader_dir),
@@ -205,7 +201,7 @@ def _ladder_end(run, table, market, rungs, execution, partial: Path, parity_dir:
         "reference_ledger": LEDGER_NOTE,
     }
     closed = loops = None
-    if (run.run_dir / PredictionPanel.FILE_NAME).exists():
+    if run.has_prediction_panel:
         closed_dir = _trader_run(run, execution, Loop.CLOSED, partial / "trader")
         inputs["closed_loop_run"] = str(parity_dir / "trader" / closed_dir.name)
         closed = trader_rung(closed_dir, market, execution, name="closed")

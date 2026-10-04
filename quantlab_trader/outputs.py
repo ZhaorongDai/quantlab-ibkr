@@ -29,7 +29,10 @@
   quantlab's report-input builders.
 
 The directory is written under a temporary name and renamed when complete, so
-a failed run leaves no half-written directory.
+a failed run leaves no half-written directory. Its files whose names a quantlab
+run directory also uses (``config.json``, ``equity.zarr``, ``metrics.json``,
+``report.html``) are named only here, and read back with ``read_config``,
+``read_equity``, ``read_metrics`` and ``report_path``.
 """
 
 from __future__ import annotations
@@ -442,21 +445,21 @@ class RunRecorder:
         ``runner.run`` writes the directory once the venue has run::
 
             run_dir = recorder.write(venue.run(strategy))
-            metrics = json.loads((run_dir / "metrics.json").read_text())
+            metrics = read_metrics(run_dir)
         """
         output_dir = Path(self.config.output_dir or self.run.run_dir.parent)
         run_dir = output_dir / self.run_name
         partial = output_dir / f".{run_dir.name}.partial"
         partial.mkdir(parents=True)
         try:
-            self._write_config(partial / "config.json")
+            self._write_config(partial / _CONFIG_FILE)
             decisions = self._decisions_dataset()
             holdings = self._holdings_dataset()
             equity = self._equity_dataset()
             orders = self._orders_dataset()
             decisions.to_zarr(partial / "decisions.zarr", mode="w")
             holdings.to_zarr(partial / "holdings.zarr", mode="w")
-            equity.to_zarr(partial / "equity.zarr", mode="w")
+            equity.to_zarr(partial / _EQUITY_FILE, mode="w")
             orders.to_zarr(partial / "orders.zarr", mode="w")
             (partial / "events.json").write_text(json.dumps({"events": self._events}, indent=2))
             self._write_metrics_and_report(partial, holdings, equity, orders, report)
@@ -521,7 +524,7 @@ class RunRecorder:
             closed_loop=self.config.loop is Loop.CLOSED,
             notes=NOTES,
         )
-        (directory / "metrics.json").write_text(
+        (directory / _METRICS_FILE).write_text(
             json.dumps(jsonable(self.metrics), indent=2)
         )
 
@@ -531,7 +534,7 @@ class RunRecorder:
             block["trained_checkpoint"] = records["trained_checkpoint"]
         span = backtest_stats.drawdown_span(equity["value"])
         summary = report_summary(
-            run.config,
+            records["recipe"],
             block,
             bar_interval=bar_interval,
             drawdown_span=span,
@@ -555,7 +558,7 @@ class RunRecorder:
             )
         write_backtest_report(
             equity["value"],
-            directory / "report.html",
+            directory / _REPORT_FILE,
             title=self.run_name,
             summary=summary,
             windows=report_windows(
@@ -705,3 +708,58 @@ def _execution_table(metrics: dict) -> dict:
         "Factor mismatches": trader["mismatches"]["count"],
         "Peak cash debit": trader["peak_cash_debit"],
     }
+
+
+_CONFIG_FILE = "config.json"
+_EQUITY_FILE = "equity.zarr"
+_METRICS_FILE = "metrics.json"
+_REPORT_FILE = "report.html"
+
+
+def read_config(run_dir: Path) -> dict:
+    """Return a trader run's config: its ``TraderConfig`` and the quantlab run's records.
+
+    Examples
+    --------
+    ::
+
+        tracking.update_config(read_config(run_dir))
+    """
+    return json.loads((Path(run_dir) / _CONFIG_FILE).read_text())
+
+
+def read_metrics(run_dir: Path) -> dict:
+    """Return a trader run's metrics, quantlab's layout and names.
+
+    Examples
+    --------
+    ::
+
+        read_metrics(run_dir)["whole"]["Total Return [%]"]
+    """
+    return json.loads((Path(run_dir) / _METRICS_FILE).read_text())
+
+
+def read_equity(run_dir: Path) -> xr.Dataset:
+    """Return a trader run's equity curve, ``value`` and ``returns`` on ``timestamp``, loaded.
+
+    Examples
+    --------
+    ::
+
+        value = read_equity(run_dir)["value"]
+    """
+    with xr.open_zarr(Path(run_dir) / _EQUITY_FILE) as equity:
+        return equity.load()
+
+
+def report_path(run_dir: Path) -> Path:
+    """Return where a trader run's HTML report is.
+
+    Examples
+    --------
+    ::
+
+        tracking.log_file(report_path(run_dir))
+    """
+    return Path(run_dir) / _REPORT_FILE

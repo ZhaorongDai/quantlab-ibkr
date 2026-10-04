@@ -245,7 +245,7 @@ def test_a_run_without_a_prediction_panel_is_refused(tmp_path):
         {10001: [1.0, np.nan, np.nan, np.nan]},
     )
 
-    with pytest.raises(ValueError, match="predictions.zarr"):
+    with pytest.raises(ValueError, match="no prediction panel"):
         _replay(quantlab_run, tmp_path, "closed")
     assert not (tmp_path / "trader").exists()
 
@@ -263,6 +263,13 @@ def _edit_config(run_dir: Path, edit) -> None:
     (run_dir / "config.json").write_text(json.dumps(config))
 
 
+def _edit_record(run_dir: Path, edit) -> None:
+    """Edit the quantlab run's ``run.json``, to check a refusal of a run quantlab wrote otherwise."""
+    record = json.loads((run_dir / "run.json").read_text())
+    edit(record)
+    (run_dir / "run.json").write_text(json.dumps(record))
+
+
 def test_a_rule_declaring_required_factors_is_refused(tmp_path):
     quantlab_run, _, _ = _build(tmp_path, "topn")
     _edit_config(
@@ -276,8 +283,8 @@ def test_a_rule_declaring_required_factors_is_refused(tmp_path):
 
 def test_a_run_valued_at_raw_prices_is_refused_closed_loop(tmp_path):
     quantlab_run, _, _ = _build(tmp_path, "topn")
-    _edit_config(
-        quantlab_run, lambda c: c["market"].update(valuation_price_column="close")
+    _edit_record(
+        quantlab_run, lambda r: r["market"].update(valuation_price_column="close")
     )
 
     with pytest.raises(ValueError, match="adjusted"):
