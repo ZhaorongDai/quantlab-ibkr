@@ -69,7 +69,7 @@ window's first bar for `run()`, the first fold's for `run_cv()`). Narrowing trad
 `quantlab.portfolio.decision_inputs`, `quantlab.runs.prediction_panel` (`PredictionPanel`),
 `quantlab.dataset.base` (the `MarketDataset` check),
 `quantlab.core.component` (`get_cls_from_path`),
-`quantlab.tracking.base`, `quantlab.utils.backtest_report`, `quantlab.utils.date_range` (bar labels), and the public returns-statistics
+`quantlab.tracking.base`, `quantlab.runs.backtest_report`, `quantlab.utils.date_range` (bar labels), and the public returns-statistics
 module ADR 0007 has quantlab add for `metrics.json`. At run time it also loads, by class path from
 `config.json`, the rule's module (`quantlab.portfolio.*`), the price dataset's module
 (`quantlab.dataset.*`) and the tracker's (`quantlab.tracking.*`). The one exception is the `parity`

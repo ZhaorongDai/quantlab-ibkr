@@ -15,7 +15,7 @@ import xarray as xr
 
 import pytest
 
-import quantlab.base.backtest as quantlab_backtest
+import quantlab.backtest.base as quantlab_backtest
 import quantlab_trader.outputs as trader_outputs
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.runner import run

@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.utils import backtest_stats
+from quantlab.runs import backtest_stats
 from quantlab_trader._support.jsonable import jsonable
 from quantlab_trader.parity.rung import RUNG_DESCRIPTIONS, RUNGS, RungResult
 from quantlab_trader.quantlab_run import QuantlabRun

@@ -14,7 +14,7 @@ trader depends on their shape. quantlab records its own ADR when it implements t
 plus `predictor.label_scales`. A process that has no model can only satisfy that by faking label
 objects. So `quantlab/portfolio/base.py` gains a frozen `LabelSpec(name, scale, delay, span)`
 (`span` is `None` for a label that is not a `Forward` label), and `bind` takes
-`Sequence[LabelSpec]`. `quantlab/base/backtest.py` gains `label_specs(predictor)`, which derives the
+`Sequence[LabelSpec]`. `quantlab/backtest/base.py` gains `label_specs(predictor)`, which derives the
 specs from `labels`, `label_delays` and `label_scales`. The backtester binds through it
 (`us_equity.py:102` today). This is the only metadata a rule may read about a prediction.
 

@@ -25,7 +25,8 @@ from quantlab.runs.prediction_panel import PredictionPanel
 from quantlab.tracking.base import NullTracker, Tracker
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.runs.backtest_run import BacktestRun, Market
-from quantlab.utils import backtest_stats, date_range
+from quantlab.utils import date_range
+from quantlab.runs import backtest_stats
 
 #: The split keys of a quantlab run's metrics (``run()`` records the singular
 #: ``in_sample_range`` and ``training_window``, a ``run_cv()`` run the plural

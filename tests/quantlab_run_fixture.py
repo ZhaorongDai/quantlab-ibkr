@@ -40,7 +40,7 @@ import xarray as xr
 
 from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStockVectorBt
 from quantlab.backtest.predefined.weights import WeightsVectorBt
-from quantlab.base.config import CrossSectionBacktestConfig, WeightsBacktestConfig
+from quantlab.backtest.config import CrossSectionBacktestConfig, WeightsBacktestConfig
 from quantlab.dataset.config import CrspDatasetConfig, DatasetConfig
 from quantlab.portfolio.base import PortfolioConstructor
 from quantlab.runs.prediction_panel import LabelSpec, PredictionPanel

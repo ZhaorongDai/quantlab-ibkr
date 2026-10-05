@@ -56,8 +56,8 @@ ALLOWED = {
     "quantlab.dataset.base",
     "quantlab.core.component",
     "quantlab.tracking.base",
-    "quantlab.utils.backtest_report",
-    "quantlab.utils.backtest_stats",
+    "quantlab.runs.backtest_report",
+    "quantlab.runs.backtest_stats",
     "quantlab.utils.date_range",
 }
 

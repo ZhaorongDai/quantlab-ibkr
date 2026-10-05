@@ -47,8 +47,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.utils import backtest_stats
-from quantlab.utils.backtest_report import (
+from quantlab.runs import backtest_stats
+from quantlab.runs.backtest_report import (
     report_chart_inputs,
     report_portfolio_inputs,
     report_summary,

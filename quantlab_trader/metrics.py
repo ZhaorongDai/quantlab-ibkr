@@ -3,7 +3,7 @@
 ``run_metrics`` turns what a trader run recorded (equity, fills, orders,
 decisions and events) into the blocks a quantlab run's ``metrics.json``
 has, computed by quantlab's own public statistics
-(``quantlab.utils.backtest_stats``) so the numbers are comparable:
+(``quantlab.runs.backtest_stats``) so the numbers are comparable:
 
 - ``whole``: quantlab's rows in quantlab's order (a vectorbt run's): the return statistics over the trader window, ``Start
   Value`` and ``End Value``, ``Max Gross Exposure [%]``, ``Total Fees Paid``,
@@ -62,7 +62,8 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.utils import backtest_stats, date_range
+from quantlab.utils import date_range
+from quantlab.runs import backtest_stats
 from quantlab_trader._support.jsonable import python_scalar
 
 #: Order statuses of a next-open order that ended without a fill.
