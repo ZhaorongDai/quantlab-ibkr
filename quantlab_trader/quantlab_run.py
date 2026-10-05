@@ -19,7 +19,7 @@ from typing import Self
 import pandas as pd
 import xarray as xr
 
-from quantlab.base.data import MarketDataset
+from quantlab.dataset.base import MarketDataset
 from quantlab.base.portfolio import PortfolioConstructor
 from quantlab.runs.prediction_panel import PredictionPanel
 from quantlab.tracking.base import NullTracker, Tracker
@@ -66,7 +66,7 @@ class QuantlabRun:
         The run directory, absolute.
     backtest_run : quantlab.runs.backtest_run.BacktestRun
         The run, as quantlab reads it.
-    price_dataset : quantlab.base.data.MarketDataset
+    price_dataset : quantlab.dataset.base.MarketDataset
         The run's price dataset, rebuilt from its recipe.
     market : quantlab.runs.backtest_run.Market
         ``fill_price_column`` and ``valuation_price_column``, the run's

@@ -53,7 +53,7 @@ ALLOWED = {
     "quantlab.portfolio.decision_inputs",
     "quantlab.runs.prediction_panel",
     "quantlab.runs.backtest_run",
-    "quantlab.base.data",
+    "quantlab.dataset.base",
     "quantlab.core.component",
     "quantlab.tracking.base",
     "quantlab.utils.backtest_report",
