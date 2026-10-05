@@ -67,7 +67,7 @@ window's first bar for `run()`, the first fold's for `run_cv()`). Narrowing trad
 
 **The quantlab allowlist.** trader's source may import exactly `quantlab.base.portfolio`,
 `quantlab.portfolio.decision_inputs`, `quantlab.base.data` (the `MarketDataset` check),
-`quantlab.utils.module` (`load_dataset_from_config`, `get_cls_from_path`),
+`quantlab.core.component` (`get_cls_from_path`),
 `quantlab.base.tracking`, `quantlab.utils.backtest_report`, and the public returns-statistics
 module ADR 0007 has quantlab add for `metrics.json`. At run time it also loads, by class path from
 `config.json`, the rule's module (`quantlab.portfolio.*`), the price dataset's module
@@ -142,5 +142,5 @@ in the run's `run.json`, not its `config.json`. The parity rung rebuilds the bac
 quantlab run and indexes no key of its config; `tests/test_quantlab_boundary.py` adds a source scan
 for both, outside `outputs.py`, which owns trader's own run directory and its files of the same
 names. A run's window is its first and last simulated bar, so a replay window narrowed by
-`start`/`end` must lie within the bars the run simulated. `quantlab.utils.module` stays on the allowlist for `get_cls_from_path` (a tracker named in
+`start`/`end` must lie within the bars the run simulated. `quantlab.core.component` stays on the allowlist for `get_cls_from_path` (a tracker named in
 a trader config).

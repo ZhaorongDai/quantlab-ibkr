@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self
 
 from quantlab.base.tracking import Tracker
-from quantlab.utils.module import get_cls_from_path
+from quantlab.core.component import get_cls_from_path
 from quantlab_trader.base.venue import Loop
 
 if TYPE_CHECKING:
