@@ -15,7 +15,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Self
 
-from quantlab.base.tracking import Tracker
+from quantlab.tracking.base import Tracker
 from quantlab.core.component import get_cls_from_path
 from quantlab_trader.base.venue import Loop
 
@@ -125,7 +125,7 @@ class TraderConfig:
     output_dir : str or None
         Where the run directory is created; ``None`` puts it beside the
         quantlab run directory.
-    tracker : quantlab.base.tracking.Tracker or None
+    tracker : quantlab.tracking.base.Tracker or None
         Where metrics are logged; ``None`` means the quantlab run's tracker.
     name : str or None
         Prefix of the run directory's name; ``None`` uses the quantlab run

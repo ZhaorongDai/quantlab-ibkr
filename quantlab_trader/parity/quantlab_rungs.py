@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.base.tracking import NullTracker
+from quantlab.tracking.base import NullTracker
 from quantlab_trader.parity.market import Market, ffill, shift
 from quantlab_trader.parity.rung import RungResult
 from quantlab_trader.parity.vectorbt_ledger import VBT_ABS, VBT_REL

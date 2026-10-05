@@ -21,7 +21,7 @@ import xarray as xr
 
 from quantlab.base.data import MarketDataset
 from quantlab.base.portfolio import PortfolioConstructor, PredictionPanel
-from quantlab.base.tracking import NullTracker, Tracker
+from quantlab.tracking.base import NullTracker, Tracker
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.runs.backtest_run import BacktestRun, Market
 from quantlab.utils import backtest_stats

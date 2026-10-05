@@ -69,7 +69,7 @@ import dataclasses
 import shutil
 from pathlib import Path
 
-from quantlab.base.tracking import NullTracker
+from quantlab.tracking.base import NullTracker
 from quantlab_trader import runner
 from quantlab_trader.base.config import TraderConfig
 from quantlab_trader.base.venue import Loop
