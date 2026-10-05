@@ -23,7 +23,8 @@ import pytest
 import xarray as xr
 
 from quantlab.base.config import TopNConfig
-from quantlab.base.portfolio import Decision, LabelSpec
+from quantlab.base.portfolio import Decision
+from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab_trader.base.venue import BarInputs, NextOpenOrder

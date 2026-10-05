@@ -46,7 +46,8 @@ from quantlab.base.config import (
     DatasetConfig,
     WeightsBacktestConfig,
 )
-from quantlab.base.portfolio import LabelSpec, PortfolioConstructor, PredictionPanel
+from quantlab.base.portfolio import PortfolioConstructor
+from quantlab.runs.prediction_panel import LabelSpec, PredictionPanel
 from quantlab.tracking.base import Tracker
 from quantlab.dataset.crsp import CrspStockDataset
 from quantlab.dataset.stock import StockDataset

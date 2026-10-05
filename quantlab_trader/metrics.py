@@ -62,7 +62,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.utils import backtest_stats
+from quantlab.utils import backtest_stats, date_range
 from quantlab_trader._support.jsonable import python_scalar
 
 #: Order statuses of a next-open order that ended without a fill.
@@ -207,7 +207,7 @@ def run_metrics(
     stats = _Stats(equity, fills, init_cash, bar_interval, year_freq, rebalance_periods)
     timestamps = equity["timestamp"].values
     calendar = pd.DatetimeIndex(timestamps)
-    whole_range = [(backtest_stats.bar_label(timestamps[0]), backtest_stats.bar_label(timestamps[-1]))]
+    whole_range = [(date_range.bar_label(timestamps[0]), date_range.bar_label(timestamps[-1]))]
     executed = _executions(fills, events, closes.reindex(calendar))
     trips = backtest_stats.round_trips(
         executed.fills, executed.close, cash_flows=executed.cash_flows
@@ -382,12 +382,12 @@ def _cut(pair, calendar: pd.DatetimeIndex) -> list[str] | None:
     if pair is None:
         return None
     inside = calendar[
-        (calendar >= pd.Timestamp(backtest_stats.label_ns(pair[0])))
-        & (calendar <= pd.Timestamp(backtest_stats.label_ns(pair[1])))
+        (calendar >= pd.Timestamp(date_range.label_ns(pair[0])))
+        & (calendar <= pd.Timestamp(date_range.label_ns(pair[1])))
     ]
     if not len(inside):
         return None
-    return [backtest_stats.bar_label(inside[0]), backtest_stats.bar_label(inside[-1])]
+    return [date_range.bar_label(inside[0]), date_range.bar_label(inside[-1])]
 
 
 def _cut_split(split: Mapping, calendar: pd.DatetimeIndex) -> dict:
@@ -735,7 +735,7 @@ def _trade_counts(trips: xr.Dataset, ranges) -> dict:
     exit_ = trips["exit_timestamp"].values.astype("datetime64[ns]")
     open_count = 0
     for _, end in ranges:
-        end_ts = backtest_stats.label_ns(end)
+        end_ts = date_range.label_ns(end)
         open_count += int(((entry <= end_ts) & (~closed | (exit_ > end_ts))).sum())
     return {
         "Total Closed Trades": int((closed & backtest_stats.in_ranges(exit_, ranges)).sum()),

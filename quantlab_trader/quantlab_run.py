@@ -20,11 +20,12 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.base.data import MarketDataset
-from quantlab.base.portfolio import PortfolioConstructor, PredictionPanel
+from quantlab.base.portfolio import PortfolioConstructor
+from quantlab.runs.prediction_panel import PredictionPanel
 from quantlab.tracking.base import NullTracker, Tracker
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.runs.backtest_run import BacktestRun, Market
-from quantlab.utils import backtest_stats
+from quantlab.utils import backtest_stats, date_range
 
 #: The split keys of a quantlab run's metrics (``run()`` records the singular
 #: ``in_sample_range`` and ``training_window``, a ``run_cv()`` run the plural
@@ -270,7 +271,7 @@ class QuantlabRun:
                     "fold": fold["fold"],
                     "training_window": fold["metrics"].get("training_window"),
                     "traded": tuple(
-                        backtest_stats.bar_label(fold["metrics"]["whole"][key])
+                        date_range.bar_label(fold["metrics"]["whole"][key])
                         for key in ("Start", "End")
                     ),
                     "in_sample_range": fold["metrics"].get("in_sample_range"),
