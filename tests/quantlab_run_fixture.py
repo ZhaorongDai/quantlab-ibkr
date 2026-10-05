@@ -42,7 +42,7 @@ from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStoc
 from quantlab.backtest.predefined.weights import WeightsVectorBt
 from quantlab.base.config import CrossSectionBacktestConfig, WeightsBacktestConfig
 from quantlab.dataset.config import CrspDatasetConfig, DatasetConfig
-from quantlab.base.portfolio import PortfolioConstructor
+from quantlab.portfolio.base import PortfolioConstructor
 from quantlab.runs.prediction_panel import LabelSpec, PredictionPanel
 from quantlab.tracking.base import Tracker
 from quantlab.dataset.crsp import CrspStockDataset

@@ -37,7 +37,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab.base.config import LedoitWolfConfig, MeanVarianceConfig, TopNConfig
+from quantlab.portfolio.config import LedoitWolfConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfRiskModel
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
@@ -49,7 +49,7 @@ PACKAGE = Path(__file__).resolve().parents[1] / "quantlab_trader"
 #: The quantlab modules trader's source may import (ADR 0008), the public
 #: return-statistics module (ADR 0007) among them.
 ALLOWED = {
-    "quantlab.base.portfolio",
+    "quantlab.portfolio.base",
     "quantlab.portfolio.decision_inputs",
     "quantlab.runs.prediction_panel",
     "quantlab.runs.backtest_run",

@@ -12,7 +12,7 @@ trader depends on their shape. quantlab records its own ADR when it implements t
 **Label specs replace the predictor in `bind`.** `PortfolioConstructor.bind(predictor)` reads label
 *objects*: their `get_factor_names()`, and `span_bars()` for mean-variance (`mean_variance.py:433-447`),
 plus `predictor.label_scales`. A process that has no model can only satisfy that by faking label
-objects. So `quantlab/base/portfolio.py` gains a frozen `LabelSpec(name, scale, delay, span)`
+objects. So `quantlab/portfolio/base.py` gains a frozen `LabelSpec(name, scale, delay, span)`
 (`span` is `None` for a label that is not a `Forward` label), and `bind` takes
 `Sequence[LabelSpec]`. `quantlab/base/backtest.py` gains `label_specs(predictor)`, which derives the
 specs from `labels`, `label_delays` and `label_scales`. The backtester binds through it
@@ -87,7 +87,7 @@ decision date with `PredictionPanel.write`.
 - `TopNConstructor.bind` and `MeanVarianceOptimizer.bind` read specs. `MeanVarianceOptimizer` refuses
   a spec whose `span` is `None` with the same message it gives today. `_label_names` and
   `_label_span` disappear.
-- trader's run-time imports from quantlab are `quantlab.base.portfolio`,
+- trader's run-time imports from quantlab are `quantlab.portfolio.base`,
   `quantlab.portfolio.prediction_panel` and the configured rule's module, plus the dataset layer
   for its bars.
 - A rule that declares `required_factors()` needs factor values at each bar, and trader cannot
@@ -104,7 +104,7 @@ predictions, current_weights)` builds the context (from the rule's last `history
 prices, so staleness no longer depends on the history given), `rebalances(t)` answers the
 schedule, and the rule keeps `decide`. `build_context` and `construct_panel` are deleted, and
 `load_constructor` with `quantlab/portfolio/prediction_panel.py` is replaced by
-`DecisionInputs.from_run(run_dir)`; `PredictionPanel` lives in `quantlab.base.portfolio`. trader's
-run-time imports from quantlab are therefore `quantlab.base.portfolio` and
+`DecisionInputs.from_run(run_dir)`; `PredictionPanel` lives in `quantlab.portfolio.base`. trader's
+run-time imports from quantlab are therefore `quantlab.portfolio.base` and
 `quantlab.portfolio.decision_inputs` for the decision. The rebalance anchor is settled: the
 prediction panel's first bar, the last bar never rebalancing.

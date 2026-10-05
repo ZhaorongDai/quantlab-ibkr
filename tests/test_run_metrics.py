@@ -20,7 +20,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab.base.config import LedoitWolfConfig, MeanVarianceConfig, TopNConfig
+from quantlab.portfolio.config import LedoitWolfConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.tracking.base import Tracker, TrackingRun
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfRiskModel

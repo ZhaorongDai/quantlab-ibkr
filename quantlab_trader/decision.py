@@ -25,7 +25,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.base.portfolio import Decision
+from quantlab.portfolio.base import Decision
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab_trader._support.jsonable import python_scalar
 from quantlab_trader.base.venue import BarInputs, NextOpenOrder
@@ -37,7 +37,7 @@ class CycleResult:
 
     Attributes
     ----------
-    decision : quantlab.base.portfolio.Decision or None
+    decision : quantlab.portfolio.base.Decision or None
         The bar's decision (weights on ``symbol``, all NaN to hold, the
         failure that made it a hold, the rule's events); ``None`` on a bar
         that does not rebalance.
@@ -180,7 +180,7 @@ class ConstructorTargets(TargetSource):
     --------
     quantlab's top-1 rule, rebalancing every other bar:
 
-    >>> from quantlab.base.config import TopNConfig
+    >>> from quantlab.portfolio.config import TopNConfig
     >>> from quantlab.dataset.memory import FrameDataset
     >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
     >>> bars = pd.bdate_range("2024-01-02", periods=3)
@@ -225,7 +225,7 @@ class ConstructorTargets(TargetSource):
         --------
         A source rebalancing every other bar, on its second bar:
 
-        >>> from quantlab.base.config import TopNConfig
+        >>> from quantlab.portfolio.config import TopNConfig
         >>> from quantlab.dataset.memory import FrameDataset
         >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
         >>> bars = pd.bdate_range("2024-01-02", periods=3)

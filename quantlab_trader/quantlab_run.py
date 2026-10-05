@@ -20,7 +20,7 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.dataset.base import MarketDataset
-from quantlab.base.portfolio import PortfolioConstructor
+from quantlab.portfolio.base import PortfolioConstructor
 from quantlab.runs.prediction_panel import PredictionPanel
 from quantlab.tracking.base import NullTracker, Tracker
 from quantlab.portfolio.decision_inputs import DecisionInputs

@@ -65,7 +65,7 @@ on the price dataset's calendar from the first timestamp of the run's `predictio
 window's first bar for `run()`, the first fold's for `run_cv()`). Narrowing trader's window with
 `start`/`end` does not move it, and the live run keeps counting past the run's end.
 
-**The quantlab allowlist.** trader's source may import exactly `quantlab.base.portfolio`,
+**The quantlab allowlist.** trader's source may import exactly `quantlab.portfolio.base`,
 `quantlab.portfolio.decision_inputs`, `quantlab.runs.prediction_panel` (`PredictionPanel`),
 `quantlab.dataset.base` (the `MarketDataset` check),
 `quantlab.core.component` (`get_cls_from_path`),
