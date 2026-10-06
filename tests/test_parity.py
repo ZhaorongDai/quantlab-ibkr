@@ -38,9 +38,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab.portfolio.config import LedoitWolfConfig, MeanVarianceConfig, TopNConfig
+from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
-from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfRiskModel
+from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab_trader.parity.ladder import parity
@@ -405,7 +405,7 @@ def _mean_variance():
     return MeanVarianceOptimizer(
         MeanVarianceConfig(
             expected_return_label="ret_5",
-            risk_model=LedoitWolfRiskModel(LedoitWolfConfig(lookback_bars=5)),
+            covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
             risk_aversion=5.0,
             ic=0.05,
             weight_cap=0.6,

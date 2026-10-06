@@ -20,10 +20,10 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab.portfolio.config import LedoitWolfConfig, MeanVarianceConfig, TopNConfig
+from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.tracking.base import Tracker, TrackingRun
-from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfRiskModel
+from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab_trader.base.config import TraderConfig
@@ -302,7 +302,7 @@ def test_closed_loop_held_bars_are_the_failed_bars(tmp_path):
     rule = MeanVarianceOptimizer(
         MeanVarianceConfig(
             expected_return_label="ret_5",
-            risk_model=LedoitWolfRiskModel(LedoitWolfConfig(lookback_bars=3)),
+            covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=3)),
             risk_aversion=5.0, ic=0.05, weight_cap=0.2,
         )
     )
