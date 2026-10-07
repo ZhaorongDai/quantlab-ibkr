@@ -97,7 +97,9 @@ def test_timeline_equals_quantlabs(replay):
 def test_chart_inputs_name_and_draw_the_benchmark_as_quantlab_does(replay):
     quantlab, trader = replay["quantlab"], replay["trader"]
 
-    assert set(trader) - {"extra_tables"} == set(quantlab)
+    # trader simulates no cost-free or risk-model counterfactual, so it hands
+    # the page no attribution; quantlab hands its own as None without a model.
+    assert set(trader) - {"extra_tables"} == set(quantlab) - {"attribution", "factor_attribution"}
     for name in ("in_sample_range", "init_cash", "benchmark_name", "bars_per_year"):
         assert trader[name] == quantlab[name], name
     np.testing.assert_allclose(
@@ -105,8 +107,14 @@ def test_chart_inputs_name_and_draw_the_benchmark_as_quantlab_does(replay):
     )
 
 
-def test_portfolio_tab_draws_the_actual_holdings_at_each_close(replay):
-    holdings = replay["trader"]["weights"].transpose("timestamp", "symbol").to_pandas()
+def test_portfolio_tab_draws_the_decided_targets(replay):
+    decided = xr.open_zarr(replay["run_dir"] / "decisions.zarr").load()["weight"]
+
+    xr.testing.assert_identical(replay["trader"]["weights"], decided)
+
+
+def test_holdings_tab_shows_the_actual_holdings_at_each_close(replay):
+    holdings = replay["trader"]["holdings"].transpose("timestamp", "symbol").to_pandas()
 
     # Bar 1: 500 * 11 and 250 * 21 over 10 439.70; bar 3 on: 508 of 10002.
     equity = [10_000.0, 10_439.70, 11_189.70, 11_730.87, 12_238.87, 12_746.87]
@@ -121,8 +129,10 @@ def test_portfolio_tab_draws_the_actual_holdings_at_each_close(replay):
     pd.testing.assert_frame_equal(
         holdings[[10001, 10002]], expected, check_names=False, check_freq=False, atol=1e-9
     )
-    stored = xr.open_zarr(replay["run_dir"] / "holdings.zarr").load()["weight"]
-    np.testing.assert_allclose(stored.values, replay["trader"]["weights"].values)
+    stored = xr.open_zarr(replay["run_dir"] / "holdings.zarr").load()["holding"]
+    np.testing.assert_allclose(stored.values, replay["trader"]["holdings"].values)
+    # The fixture's price dataset names no ticker lookup: each symbol is its id.
+    assert replay["trader"]["holding_names"]["10002"] == [("2024-01-03", "10002", "")]
     turnover = replay["trader"]["turnover"]
     np.testing.assert_allclose(
         turnover.values, [10_300 / 10_000, (6_200 + 5_830.8) / 11_189.70], rtol=1e-12

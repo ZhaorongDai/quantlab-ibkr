@@ -6,9 +6,10 @@
   data fingerprints);
 - ``decisions.zarr``: ``weight`` on ``(timestamp, symbol)``, one row per
   decision, in rebalance-table format (comparable with ``weights.zarr``);
-- ``holdings.zarr``: ``weight`` on ``(timestamp, symbol)``, the actual book
-  at each close (each holding's value over equity, 0 when not held), which
-  the report's Portfolio tab draws;
+- ``holdings.zarr``: ``holding`` on ``(timestamp, symbol)``, the actual book
+  at each close (each holding's value over equity, 0 when not held, every
+  decided symbol included), quantlab's layout, which the report's Holdings
+  tab shows beside the decided targets;
 - ``equity.zarr``: ``value`` (cash plus holdings at the raw close) and
   ``returns`` on ``timestamp``, quantlab's layout;
 - ``orders.zarr``: one row per next-open order on ``order``: ``decision_date``,
@@ -50,6 +51,7 @@ import xarray as xr
 from quantlab.runs import backtest_stats
 from quantlab.runs.backtest_report import (
     report_chart_inputs,
+    report_holdings_inputs,
     report_portfolio_inputs,
     report_summary,
     report_windows,
@@ -73,7 +75,8 @@ NOTES = (
     "The trade metrics are position round trips of the actual fills, open to flat: "
     "dividends, value distributions and cash in lieu received while open count in a "
     "trip's PnL, a split does not end it and a delisting settlement does.",
-    "The Portfolio tab draws the actual holdings at each close, not the decided targets.",
+    "The Portfolio tab draws the decided targets; the Holdings tab shows them beside "
+    "the actual holdings at each close.",
     "The triangles on the equity curve mark the deepest drawdown from its valley to "
     "its recovery.",
 )
@@ -454,7 +457,7 @@ class RunRecorder:
         try:
             self._write_config(partial / _CONFIG_FILE)
             decisions = self._decisions_dataset()
-            holdings = self._holdings_dataset()
+            holdings = self._holdings_dataset(decisions)
             equity = self._equity_dataset()
             orders = self._orders_dataset()
             decisions.to_zarr(partial / "decisions.zarr", mode="w")
@@ -462,7 +465,7 @@ class RunRecorder:
             equity.to_zarr(partial / _EQUITY_FILE, mode="w")
             orders.to_zarr(partial / "orders.zarr", mode="w")
             (partial / "events.json").write_text(json.dumps({"events": self._events}, indent=2))
-            self._write_metrics_and_report(partial, holdings, equity, orders, report)
+            self._write_metrics_and_report(partial, decisions, holdings, equity, orders, report)
             partial.rename(run_dir)
         except BaseException:
             shutil.rmtree(partial, ignore_errors=True)
@@ -472,6 +475,7 @@ class RunRecorder:
     def _write_metrics_and_report(
         self,
         directory: Path,
+        decisions: xr.Dataset,
         holdings: xr.Dataset,
         equity: xr.Dataset,
         orders: xr.Dataset,
@@ -484,8 +488,12 @@ class RunRecorder:
         the venue's actual fee model, then the trader lines),
         ``report_windows`` (the quantlab run's folds, cut to the trader's
         bars), ``report_chart_inputs`` (the deepest drawdown, the benchmark)
-        and ``report_portfolio_inputs`` of the actual holdings at each close;
-        ``execution.trader`` is the "Execution (event-driven)" table.
+        ``report_portfolio_inputs`` of the decided targets and the actual
+        fills, and ``report_holdings_inputs`` of the actual holdings at each
+        close, named through the price dataset's ticker lookup;
+        ``execution.trader`` is the "Execution (event-driven)" table. The
+        attribution tabs are left off: trader simulates no cost-free or
+        risk-model counterfactual.
         """
         run = self.run
         timestamps = pd.DatetimeIndex(equity["timestamp"].values)
@@ -575,7 +583,7 @@ class RunRecorder:
                 **benchmark_curves,
             ),
             **report_portfolio_inputs(
-                holdings["weight"],
+                decisions["weight"],
                 fills.rename(fill="order")
                 if fills.sizes.get("fill", 0)
                 else xr.Dataset({name: ("order", []) for name in ("timestamp", "size", "price")}),
@@ -584,6 +592,10 @@ class RunRecorder:
                 bar_interval=bar_interval,
                 trading_days_per_year=run.trading_days_per_year,
                 session_minutes_per_day=run.session_minutes_per_day,
+            ),
+            **report_holdings_inputs(
+                holdings["holding"], decisions["weight"],
+                label=_symbol_names(run.price_dataset.ticker_lookup()),
             ),
         )
 
@@ -628,21 +640,22 @@ class RunRecorder:
             weight = xr.DataArray(frame.astype(float), dims=("timestamp", "symbol"))
         return xr.Dataset({"weight": weight})
 
-    def _holdings_dataset(self) -> xr.Dataset:
-        """``weight`` on ``(timestamp, symbol)``: each holding's value at the close over equity.
+    def _holdings_dataset(self, decisions: xr.Dataset) -> xr.Dataset:
+        """``holding`` on ``(timestamp, symbol)``: each holding's value at the close over equity.
 
         One row per bar, the actual book after the bar's fills and corporate
-        actions; a security not held is 0.
+        actions; a security not held is 0. The symbols are every one held or
+        in ``decisions``, so a target that never filled has a column.
         """
         frame = pd.DataFrame(
             {cycle.timestamp: cycle.current_weights for cycle in self._cycles}
         ).T
         frame = frame.reindex(
             index=pd.DatetimeIndex([cycle.timestamp for cycle in self._cycles]),
-            columns=sorted(frame.columns),
+            columns=sorted(set(frame.columns) | {python_scalar(v) for v in decisions["symbol"].values}),
         ).astype(float).fillna(0.0)
         frame.index.name, frame.columns.name = "timestamp", "symbol"
-        return xr.Dataset({"weight": xr.DataArray(frame, dims=("timestamp", "symbol"))})
+        return xr.Dataset({"holding": xr.DataArray(frame, dims=("timestamp", "symbol"))})
 
     def _equity_dataset(self) -> xr.Dataset:
         value = pd.Series(self._equity, dtype=float).sort_index()
@@ -678,6 +691,23 @@ class RunRecorder:
             {name: ("order", values) for name, values in columns.items()},
             coords={"order": np.arange(len(rows))},
         )
+
+
+def _symbol_names(lookup) -> Callable[[list, object], list[tuple[str, str | None]]]:
+    """Return the Holdings tab's ``label``: ``(ticker, company)`` of symbols as of a day.
+
+    Names through ``lookup`` (the price dataset's ``ticker_lookup()``), as
+    quantlab's engine does, and each symbol itself (as ``str``) with no
+    company when the dataset names no lookup.
+
+    Examples
+    --------
+    >>> _symbol_names(None)([10001, 10002], None)
+    [('10001', None), ('10002', None)]
+    """
+    if lookup is None:
+        return lambda symbols, day: [(str(symbol), None) for symbol in symbols]
+    return lambda symbols, day: [(name.ticker, name.company) for name in lookup.names(symbols, day)]
 
 
 def _day(t: pd.Timestamp) -> str:
