@@ -57,6 +57,20 @@ REQUIRED_PRICE_VARIABLES: tuple[str, ...] = (
 )
 
 
+class ClosedLoopRefused(ValueError):
+    """A quantlab run trader can replay open-loop but not closed-loop.
+
+    Raised by ``QuantlabRun.decision_inputs`` for a run valued at raw prices
+    or a rule declaring ``required_factors()``; the parity ladder then
+    leaves out its closed-versus-open block instead of failing.
+
+    Examples
+    --------
+    >>> issubclass(ClosedLoopRefused, ValueError)
+    True
+    """
+
+
 @dataclass(frozen=True)
 class QuantlabRun:
     """A quantlab backtest run, as trader executes it.
@@ -387,8 +401,11 @@ class QuantlabRun:
 
         Raises
         ------
+        ClosedLoopRefused
+            For a run valued at raw prices or a rule declaring
+            ``required_factors()``.
         ValueError
-            For any of the refusals above.
+            For a run without a prediction panel.
 
         Examples
         --------
@@ -398,7 +415,7 @@ class QuantlabRun:
         """
         valuation = self.market.valuation_price_column
         if not valuation.startswith("adj"):
-            raise ValueError(
+            raise ClosedLoopRefused(
                 f"quantlab run {self.run_dir}: its valuation column {valuation!r} is not "
                 f"an adjusted price; a closed-loop replay decides on adjusted closes "
                 f"(ADR 0002)"
@@ -407,7 +424,7 @@ class QuantlabRun:
         inputs = DecisionInputs.from_run(self.run_dir, end=end)
         rule = inputs.constructor
         if rule.required_factors():
-            raise ValueError(
+            raise ClosedLoopRefused(
                 f"quantlab run {self.run_dir}: {type(rule).__name__} declares "
                 f"required_factors(); trader cannot compute factors and does not "
                 f"replay such a rule closed-loop"

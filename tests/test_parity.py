@@ -460,6 +460,31 @@ def test_a_run_without_a_prediction_panel_has_no_closed_loop_block(full):
     assert "closed_equity" not in data
 
 
+def test_a_run_trader_cannot_replay_closed_loop_still_gets_its_ladder(tmp_path):
+    # A rule declaring required_factors() (a factor risk model's exposures,
+    # #38): the ladder runs to T, the closed-loop block is left out and says why.
+    bars = pd.bdate_range("2024-01-02", periods=12)
+    open_, close = _random_market(12)
+    rng = np.random.default_rng(2)
+    run_dir, _ = build_constructor_run(
+        tmp_path / "quantlab", bars, open_, close,
+        {"ret_5": {p: list(rng.normal(0, 0.01, 12)) for p in CLOSED_PERMNOS}},
+        TopNConstructor(TopNConfig(direction="long_only", top_n=2)), LABELS,
+        first_bar=0, rebalance_periods=2, init_cash=100_000.0,
+    )
+    config = json.loads((run_dir / "config.json").read_text())
+    config["constructor"]["name"] = "tests.test_closed_loop_replay.FactorTopN"
+    (run_dir / "config.json").write_text(json.dumps(config))
+
+    report, _ = _report(parity(run_dir, output_dir=tmp_path / "parity"))
+
+    assert report["closed_vs_open"] is None
+    assert report["inputs"]["closed_loop_run"] is None
+    assert "required_factors" in report["inputs"]["closed_loop_refused"]
+    assert "closed_weights_equal_on_holding_independent_bars" not in report["checks"]
+    assert report["checks"]["T_equals_L5"]["passed"]
+
+
 def test_the_cli_writes_a_parity_report(tmp_path, capsys, full):
     from quantlab_ibkr.cli import main
 

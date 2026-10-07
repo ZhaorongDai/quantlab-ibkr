@@ -38,7 +38,9 @@ own; the ladder then checks how nautilus applies them).
 The report directory ``<output_dir>/<run name>_parity_<stamp>/`` holds:
 
 - ``parity.json``: the inputs (run directory, trader runs, the execution
-  block, the data fingerprints and whether they agree), the end checks
+  block, the data fingerprints and whether they agree, and
+  ``closed_loop_refused``, why a run with a prediction panel was not replayed
+  closed-loop: ``ClosedLoopRefused``'s message, else ``None``), the end checks
   (``L0_equals_run``, ``T_equals_L5`` and, when the run can be replayed
   closed-loop, ``closed_weights_equal_on_holding_independent_bars``) with
   their maximum errors, one row per rung with its delta to the rung above,
@@ -82,7 +84,7 @@ from quantlab_ibkr.parity.rung import RUNGS, RungResult
 from quantlab_ibkr.parity.trader_ledger import Conventions, trader_ledger
 from quantlab_ibkr.parity.trader_rung import trader_rung
 from quantlab_ibkr.parity.vectorbt_ledger import vectorbt_ledger
-from quantlab_ibkr.quantlab_run import QuantlabRun
+from quantlab_ibkr.quantlab_run import ClosedLoopRefused, QuantlabRun
 from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
 
 
@@ -196,13 +198,19 @@ def _ladder_end(run, table, market, rungs, execution, partial: Path, parity_dir:
         "quantlab_run": str(run.run_dir),
         "trader_run": str(parity_dir / "trader" / trader_dir.name),
         "closed_loop_run": None,
+        "closed_loop_refused": None,
         "execution": execution.get_config(),
         "rung_order": list(RUNGS),
         "reference_ledger": LEDGER_NOTE,
     }
     closed = loops = None
+    closed_dir = None
     if run.has_prediction_panel:
-        closed_dir = _trader_run(run, execution, Loop.CLOSED, partial / "trader")
+        try:
+            closed_dir = _trader_run(run, execution, Loop.CLOSED, partial / "trader")
+        except ClosedLoopRefused as refusal:
+            inputs["closed_loop_refused"] = str(refusal)
+    if closed_dir is not None:
         inputs["closed_loop_run"] = str(parity_dir / "trader" / closed_dir.name)
         closed = trader_rung(closed_dir, market, execution, name="closed")
         loops = closed_vs_open(run, table, market, rungs, closed, closed_dir, statistics)
