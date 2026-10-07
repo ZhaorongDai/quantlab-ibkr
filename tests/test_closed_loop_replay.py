@@ -25,6 +25,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.base import InputDeclaration
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
@@ -253,8 +254,15 @@ def test_a_run_without_a_prediction_panel_is_refused(tmp_path):
 class FactorTopN(TopNConstructor):
     """A rule declaring factors trader cannot compute."""
 
-    def required_factors(self):
-        return ["a factor"]
+    def declared_inputs(self):
+        return InputDeclaration(factors=("a factor",))
+
+
+class RiskModelTopN(TopNConstructor):
+    """A rule declaring a factor risk model trader cannot read."""
+
+    def declared_inputs(self):
+        return InputDeclaration(risk_model="a factor risk model")
 
 
 def _edit_config(run_dir: Path, edit) -> None:
@@ -270,14 +278,15 @@ def _edit_record(run_dir: Path, edit) -> None:
     (run_dir / "run.json").write_text(json.dumps(record))
 
 
-def test_a_rule_declaring_required_factors_is_refused(tmp_path):
+@pytest.mark.parametrize("rule", ["FactorTopN", "RiskModelTopN"])
+def test_a_rule_declaring_factors_or_a_risk_model_is_refused(tmp_path, rule):
     quantlab_run, _, _ = _build(tmp_path, "topn")
     _edit_config(
         quantlab_run,
-        lambda c: c["constructor"].update(name=f"{__name__}.FactorTopN"),
+        lambda c: c["constructor"].update(name=f"{__name__}.{rule}"),
     )
 
-    with pytest.raises(ValueError, match="required_factors"):
+    with pytest.raises(ValueError, match=r"declared_inputs\(\)"):
         _replay(quantlab_run, tmp_path, "closed")
 
 

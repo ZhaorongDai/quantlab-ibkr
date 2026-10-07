@@ -461,8 +461,8 @@ def test_a_run_without_a_prediction_panel_has_no_closed_loop_block(full):
 
 
 def test_a_run_trader_cannot_replay_closed_loop_still_gets_its_ladder(tmp_path):
-    # A rule declaring required_factors() (a factor risk model's exposures,
-    # #38): the ladder runs to T, the closed-loop block is left out and says why.
+    # A rule declaring factors (declared_inputs(); a factor risk model's
+    # exposures, #38): the ladder runs to T, the closed-loop block is left out and says why.
     bars = pd.bdate_range("2024-01-02", periods=12)
     open_, close = _random_market(12)
     rng = np.random.default_rng(2)
@@ -480,7 +480,7 @@ def test_a_run_trader_cannot_replay_closed_loop_still_gets_its_ladder(tmp_path):
 
     assert report["closed_vs_open"] is None
     assert report["inputs"]["closed_loop_run"] is None
-    assert "required_factors" in report["inputs"]["closed_loop_refused"]
+    assert "declared_inputs()" in report["inputs"]["closed_loop_refused"]
     assert "closed_weights_equal_on_holding_independent_bars" not in report["checks"]
     assert report["checks"]["T_equals_L5"]["passed"]
 

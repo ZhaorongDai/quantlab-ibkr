@@ -61,7 +61,8 @@ class ClosedLoopRefused(ValueError):
     """A quantlab run trader can replay open-loop but not closed-loop.
 
     Raised by ``QuantlabRun.decision_inputs`` for a run valued at raw prices
-    or a rule declaring ``required_factors()``; the parity ladder then
+    or a rule declaring factors or a factor risk model (``declared_inputs()``);
+    the parity ladder then
     leaves out its closed-versus-open block instead of failing.
 
     Examples
@@ -395,15 +396,15 @@ class QuantlabRun:
         live run's is, counting on past the run's last bar (ADR 0008). Refused (ADR
         0005, spec #18 stories 33-34) are a run whose valuation column is not
         an adjusted price (decision prices are adjusted, ADR 0002), a run
-        without a prediction panel, and a rule that declares
-        ``required_factors()``, which trader cannot compute without the
-        factor layer.
+        without a prediction panel, and a rule that declares factors or a
+        factor risk model (``declared_inputs()``), which trader cannot
+        compute or read without the factor layer.
 
         Raises
         ------
         ClosedLoopRefused
-            For a run valued at raw prices or a rule declaring
-            ``required_factors()``.
+            For a run valued at raw prices or a rule declaring factors or a
+            factor risk model.
         ValueError
             For a run without a prediction panel.
 
@@ -423,10 +424,11 @@ class QuantlabRun:
         self._require_prediction_panel()
         inputs = DecisionInputs.from_run(self.run_dir, end=end)
         rule = inputs.constructor
-        if rule.required_factors():
+        declared = rule.declared_inputs()
+        if declared.factors or declared.risk_model is not None:
             raise ClosedLoopRefused(
-                f"quantlab run {self.run_dir}: {type(rule).__name__} declares "
-                f"required_factors(); trader cannot compute factors and does not "
-                f"replay such a rule closed-loop"
+                f"quantlab run {self.run_dir}: {type(rule).__name__} declares factors or "
+                f"a factor risk model (declared_inputs()); trader cannot compute or read "
+                f"them and does not replay such a rule closed-loop"
             )
         return inputs
