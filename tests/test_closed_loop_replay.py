@@ -30,9 +30,9 @@ from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
-from quantlab_trader.base.config import TraderConfig
-from quantlab_trader.runner import run
-from quantlab_trader.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
+from quantlab_ibkr.base.config import TraderConfig
+from quantlab_ibkr.runner import run
+from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
 from tests.quantlab_run_fixture import build_constructor_run, build_quantlab_run
 
 PERMNOS = (10001, 10002, 10003, 10004)
@@ -221,7 +221,7 @@ def test_a_rule_failure_is_a_hold_recorded_with_its_message(tmp_path):
 
 
 def test_closed_loop_is_the_default_and_charges_ibkr_fixed_fees(tmp_path, capsys):
-    from quantlab_trader.cli import main
+    from quantlab_ibkr.cli import main
 
     quantlab_run, _, _ = _build(tmp_path, "topn")
 

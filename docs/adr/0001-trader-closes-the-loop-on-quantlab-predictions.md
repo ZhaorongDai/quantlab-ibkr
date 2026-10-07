@@ -5,7 +5,7 @@ date: 2026-10-01
 
 # trader closes the loop on quantlab's predictions
 
-quantlab and quantlab-trader split a strategy where it stops depending on holdings. Factors and
+quantlab and quantlab-ibkr split a strategy where it stops depending on holdings. Factors and
 the return model's predictions do not depend on what the account holds, so quantlab computes them
 in batch and hands trader a **prediction panel**: the whole period for a backtest, one decision
 date per day in live trading. Portfolio construction does depend on holdings (locked positions,

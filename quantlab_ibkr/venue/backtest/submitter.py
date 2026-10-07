@@ -1,0 +1,164 @@
+"""The backtest venue's open submitter: DAY market orders at the next open + 1 ns (ADR 0003).
+
+nautilus 1.231 rejects ``AT_THE_OPEN`` orders, so the submitter holds the
+orders decided at the close of t and, one nanosecond after the opening prints
+of the next bar, submits each as a plain ``MarketOrder`` with
+``TimeInForce.DAY``, sells first; it fills at the opening print. An order
+whose security has no opening print that day (a halt, or nothing left to trade
+after a delisting) is not submitted: it is a rejected order in quantlab's ADR
+0014 sense, reported unfilled and the holding is kept. An order decided on the
+window's last bar has no next open and is reported unfilled too.
+
+An order queued across a holder split was sized in pre-split shares: it is
+submitted as ``floor(quantity * k)`` shares, the same economic quantity in the
+new unit (ADR 0009). One that rounds to no share is reported unfilled.
+"""
+
+from __future__ import annotations
+
+import dataclasses
+from collections.abc import Hashable, Mapping, Sequence
+from typing import TYPE_CHECKING
+
+import pandas as pd
+from nautilus_trader.model.enums import TimeInForce
+
+from quantlab_ibkr.base.venue import NextOpenOrder, OpenSubmitter
+from quantlab_ibkr.venue.backtest.corporate_actions import split_shares
+from quantlab_ibkr.venue.backtest.feed import OPEN_TIME, session_ns
+
+if TYPE_CHECKING:
+    from quantlab_ibkr.strategy import PortfolioStrategy
+
+#: Reason recorded for an order decided on the last bar of the window.
+NO_NEXT_OPEN = "no next open in the backtest window"
+#: Reason recorded for an order whose security has no opening print on its fill bar.
+NO_OPENING_PRINT = "no opening print on {date}"
+#: Reason recorded for an order a split rescaled to no share.
+SPLIT_TO_ZERO = "rescaled to 0 shares by the split on {date}"
+
+
+class BacktestOpenSubmitter(OpenSubmitter):
+    """Queue next-open orders and release them at the next bar's open + 1 ns.
+
+    Parameters
+    ----------
+    calendar : pandas.DatetimeIndex
+        The window's bars; the next open of t is the open of the bar after t.
+    opening_prints : pandas.DataFrame
+        Booleans on ``(timestamp, symbol)``: the feed carries an opening print
+        of the security on that bar.
+    split_factors : Mapping, optional
+        The holder split factor ``k`` by ``(ex-date, permno)``.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-02", periods=2)
+    >>> opens = pd.DataFrame({10001: [True, True]}, index=bars)
+    >>> submitter = BacktestOpenSubmitter(bars, opens, {(bars[1], 10001): 2.0})
+    >>> isinstance(submitter, OpenSubmitter)
+    True
+    """
+
+    def __init__(
+        self,
+        calendar: pd.DatetimeIndex,
+        opening_prints: pd.DataFrame,
+        split_factors: Mapping[tuple[pd.Timestamp, Hashable], float] | None = None,
+    ):
+        self._calendar = pd.DatetimeIndex(calendar)
+        self._opening_prints = opening_prints
+        self._split_factors = dict(split_factors or {})
+        self._strategy: PortfolioStrategy | None = None
+
+    def attach(self, strategy: PortfolioStrategy) -> None:
+        """Bind the strategy that submits the orders.
+
+        Parameters
+        ----------
+        strategy : PortfolioStrategy
+            The strategy whose clock releases the orders and whose
+            ``submit_next_open`` and ``on_next_open_unfilled`` it calls.
+
+        Examples
+        --------
+        ``PortfolioStrategy.on_start`` attaches itself::
+
+            venue.submitter.attach(strategy)
+        """
+        self._strategy = strategy
+
+    def submit(self, orders: Sequence[NextOpenOrder], decision_date: pd.Timestamp) -> None:
+        """Queue ``orders`` for the open after ``decision_date``.
+
+        One time alert at the next bar's open + 1 ns releases them, sells
+        first; orders decided on the window's last bar are reported unfilled
+        at once.
+
+        Parameters
+        ----------
+        orders : Sequence of NextOpenOrder
+            The orders decided at the close of ``decision_date``.
+        decision_date : pandas.Timestamp
+            The decision bar.
+
+        Examples
+        --------
+        A stand-in strategy that prints the alerts it is set and the orders
+        reported unfilled:
+
+        >>> from types import SimpleNamespace
+        >>> class PrintingClock:
+        ...     def set_time_alert(self, name, alert_time, callback):
+        ...         print(name, alert_time)
+        >>> strategy = SimpleNamespace(
+        ...     clock=PrintingClock(),
+        ...     on_next_open_unfilled=lambda order, reason: print(order.permno, reason),
+        ... )
+        >>> bars = pd.bdate_range("2024-01-02", periods=2)
+        >>> submitter = BacktestOpenSubmitter(bars, pd.DataFrame({10001: [True, True]}, index=bars))
+        >>> submitter.attach(strategy)
+        >>> submitter.submit([NextOpenOrder(10001, "BUY", 10, bars[0])], bars[0])
+        next-open-2024-01-03 2024-01-03 14:30:00.000000001+00:00
+        >>> submitter.submit([NextOpenOrder(10001, "BUY", 10, bars[1])], bars[1])
+        10001 no next open in the backtest window
+        """
+        if not orders:
+            return
+        strategy = self._strategy
+        position = self._calendar.searchsorted(decision_date, side="right")
+        if position >= len(self._calendar):
+            for order in orders:
+                strategy.on_next_open_unfilled(order, NO_NEXT_OPEN)
+            return
+        next_bar = self._calendar[position]
+        queued = sorted(orders, key=lambda order: order.side != "SELL")
+        strategy.clock.set_time_alert(
+            f"next-open-{next_bar.date()}",
+            pd.Timestamp(session_ns(next_bar, OPEN_TIME) + 1, tz="UTC"),
+            lambda _event: self._release(queued, next_bar),
+        )
+
+    def _release(self, orders: Sequence[NextOpenOrder], bar: pd.Timestamp) -> None:
+        """Submit the queued orders as DAY market orders, in queue order.
+
+        An order whose security had no opening print on ``bar`` is reported
+        unfilled instead; one across a split on ``bar`` is rescaled first.
+        """
+        opens_on_bar = self._opening_prints.loc[bar]
+        for order in orders:
+            if not opens_on_bar.get(order.permno, False):
+                self._strategy.on_next_open_unfilled(
+                    order, NO_OPENING_PRINT.format(date=bar.date())
+                )
+                continue
+            k = self._split_factors.get((bar, order.permno))
+            if k is not None:
+                quantity = split_shares(order.quantity, k)
+                if quantity == 0:
+                    self._strategy.on_next_open_unfilled(
+                        order, SPLIT_TO_ZERO.format(date=bar.date())
+                    )
+                    continue
+                order = dataclasses.replace(order, quantity=quantity)
+            self._strategy.submit_next_open(order, TimeInForce.DAY)

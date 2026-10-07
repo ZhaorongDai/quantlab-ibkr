@@ -68,7 +68,7 @@ counts and equity match an independent ledger after every close for splitFactor 
 ## Amendment (2026-10-01, split-factor research)
 
 CRSP's price factor alone does not give a holder's share count
-([research](https://github.com/ZhaorongDai/quantlab-trader/issues/16)). The venue therefore uses
+([research](https://github.com/ZhaorongDai/quantlab-ibkr/issues/16)). The venue therefore uses
 the **holder split factor** `k`, booked only on days where `splitFactor ≈ shareFactor`
 (`shareFactor = cumfacshr[t-1] / cumfacshr[t]`, from the dataset's `cumfacshr` variable): `k`
 drives the split venue fill, cash in lieu (pre-split close / k) and the open submitter's rescale of
@@ -79,14 +79,14 @@ a queued order. A day with `splitFactor > 1` and `shareFactor = 1` is a **value 
 `k > 0`: a final distribution (`disfacpr = -1`, a merger or liquidation) gives `k = 0` and goes
 through the delisting path, never a split to zero shares. Any other factor day leaves the position
 alone and is logged. No position is opened in a spin-off's new PERMNO. Measured on 2000-2025 CRSP
-([#17](https://github.com/ZhaorongDai/quantlab-trader/issues/17)): 6,721 holder-split days, 657
+([#17](https://github.com/ZhaorongDai/quantlab-ibkr/issues/17)): 6,721 holder-split days, 657
 value-distribution days, 5,911 final events; the store's `splitFactor` equals the `cumfacpr` ratio
 on every comparable day.
 
 ## Amendment (2026-10-02, price-implied share changes, #27)
 
 The factors alone miss share changes CRSP's return knows about
-([#27](https://github.com/ZhaorongDai/quantlab-trader/issues/27)): on the market store a reverse
+([#27](https://github.com/ZhaorongDai/quantlab-ibkr/issues/27)): on the market store a reverse
 split whose share factor disagrees with its price factor (PERMNO 18217, 2024-03-15) was left as
 `OTHER`, and a reverse split after a six-week halt with no factor at all (PERMNO 14051, 1:67)
 was not booked, so raw-price holdings jumped by multiples no holder had.
@@ -142,7 +142,7 @@ as `adjClose` does, not the loss the raw prices show. That is a data question fo
 ## Amendment (2026-10-03, implied splits only for the reverse-split shape, #28)
 
 The review of the #27 work found the "known cost" above to be a defect, not a data footnote
-([#28](https://github.com/ZhaorongDai/quantlab-trader/issues/28)): when CRSP's `ret` is missing
+([#28](https://github.com/ZhaorongDai/quantlab-ibkr/issues/28)): when CRSP's `ret` is missing
 across a collapse that is not a delisting (90090 2023-03-13, 70.00 to 0.13, x 538), quantlab
 chains the missing return as 0, `adjClose` stays flat, and booking x > 1 as an implied split
 **adds shares that preserve value the holder actually lost**. No venue does that, so the backtest

@@ -3,9 +3,9 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "quantlab-trader"
+name = "quantlab-ibkr"
 version = "0.1.0"
-description = "Event-driven backtesting and live trading of quantlab strategies on NautilusTrader."
+description = "Event-driven backtesting and IBKR trading of quantlab strategies on NautilusTrader."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.scripts]
-quantlab-trader = "quantlab_trader.cli:main"
+quantlab-ibkr = "quantlab_ibkr.cli:main"
 
 [dependency-groups]
 dev = [
@@ -26,13 +26,13 @@ quantlab = { path = "../quantlab", editable = true }
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["quantlab_trader*"]
+include = ["quantlab_ibkr*"]
 namespaces = false
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
 # The docstrings' Examples run as doctests beside the tests.
-testpaths = ["tests", "quantlab_trader"]
+testpaths = ["tests", "quantlab_ibkr"]
 addopts = ["--doctest-modules"]
 doctest_optionflags = ["ELLIPSIS"]
 # A test that runs past this many seconds dumps every thread's stack and ends

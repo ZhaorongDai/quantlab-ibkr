@@ -27,8 +27,8 @@ from quantlab.portfolio.base import Decision
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.portfolio.predefined.top_n import TopNConstructor
-from quantlab_trader.base.venue import BarInputs, NextOpenOrder
-from quantlab_trader.decision import ConstructorTargets, DecisionCycle, TableTargets
+from quantlab_ibkr.base.venue import BarInputs, NextOpenOrder
+from quantlab_ibkr.decision import ConstructorTargets, DecisionCycle, TableTargets
 from tests.quantlab_run_fixture import _crsp_dataset
 
 T = pd.Timestamp("2024-01-03")

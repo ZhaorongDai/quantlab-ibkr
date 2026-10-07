@@ -40,9 +40,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab_trader.base.config import TraderConfig
-from quantlab_trader.runner import run
-from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+from quantlab_ibkr.base.config import TraderConfig
+from quantlab_ibkr.runner import run
+from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
 from tests.quantlab_run_fixture import ADJUSTED_SCALE, build_quantlab_run, write_crsp_store
 
 NAN = np.nan

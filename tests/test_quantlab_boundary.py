@@ -44,7 +44,7 @@ from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
 from tests.quantlab_run_fixture import build_constructor_run, build_quantlab_run
 
-PACKAGE = Path(__file__).resolve().parents[1] / "quantlab_trader"
+PACKAGE = Path(__file__).resolve().parents[1] / "quantlab_ibkr"
 
 #: The quantlab modules trader's source may import (ADR 0008), the public
 #: return-statistics module (ADR 0007) among them.
@@ -174,10 +174,10 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
     script = textwrap.dedent(
         f"""
         import json, sys
-        import quantlab_trader.cli
-        from quantlab_trader.base.config import TraderConfig
-        from quantlab_trader.runner import run
-        from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+        import quantlab_ibkr.cli
+        from quantlab_ibkr.base.config import TraderConfig
+        from quantlab_ibkr.runner import run
+        from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
 
         run_dir = run(TraderConfig(
             quantlab_run={str(quantlab_run)!r}, venue=BacktestVenueConfig(),
@@ -186,7 +186,7 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
         loaded = [m for m in sys.modules if m.startswith({FORBIDDEN!r})]
         loaded += [
             m for m in sys.modules
-            if m == "quantlab_trader.parity" or m.startswith("quantlab_trader.parity.")
+            if m == "quantlab_ibkr.parity" or m.startswith("quantlab_ibkr.parity.")
         ]
         print(json.dumps({{"run_dir": str(run_dir), "loaded": loaded}}))
         """

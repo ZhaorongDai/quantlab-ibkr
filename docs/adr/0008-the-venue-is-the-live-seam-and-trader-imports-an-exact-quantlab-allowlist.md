@@ -10,7 +10,7 @@ between the backtest and IBKR paper trading sits behind a **venue**, so the live
 venue package and changes nothing else:
 
 ```
-quantlab_trader/
+quantlab_ibkr/
   base/config.py        TraderConfig, root VenueConfig (frozen dataclasses, get_config/from_config)
   base/venue.py         Venue and its four parts (InstrumentResolver, OpenSubmitter,
                         DecisionSource, DecisionClock); BarInputs, NextOpenOrder;
@@ -27,7 +27,7 @@ quantlab_trader/
   parity/               parity ladder and report (ADR 0007): ladder.py (the driver),
                         one module per step (#32); the only package that may
                         import quantlab's backtest layer
-  cli.py                `quantlab-trader backtest` (and `parity`, #9)
+  cli.py                `quantlab-ibkr backtest` (and `parity`, #9)
   venue/backtest/       venue.py (BacktestVenue), feed.py, resolver.py, submitter.py,
                         source.py, clock.py, fees.py, fills.py, corporate_actions.py
   venue/ibkr/           not created in v1; the live effort's package

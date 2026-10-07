@@ -6,7 +6,7 @@ compares the entries both sides share (same key, same ``request``) by digest
 alone, and has no verdict when they share none.
 """
 
-from quantlab_trader.parity.ladder import _fingerprints_agree
+from quantlab_ibkr.parity.ladder import _fingerprints_agree
 
 
 def _entry(start: str, digest: str, variables=("adjClose", "adjOpen")) -> dict:

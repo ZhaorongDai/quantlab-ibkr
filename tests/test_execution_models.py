@@ -41,11 +41,11 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab_trader.base.config import TraderConfig
-from quantlab_trader.base.venue import Loop, ReplayRequest
-from quantlab_trader.runner import run
-from quantlab_trader.venue.backtest.fees import FractionFeeModel, IbkrFixedFeeModel
-from quantlab_trader.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
+from quantlab_ibkr.base.config import TraderConfig
+from quantlab_ibkr.base.venue import Loop, ReplayRequest
+from quantlab_ibkr.runner import run
+from quantlab_ibkr.venue.backtest.fees import FractionFeeModel, IbkrFixedFeeModel
+from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
 from tests.quantlab_run_fixture import build_quantlab_run
 
 NAN = np.nan
@@ -178,7 +178,7 @@ def test_execution_overrides_round_trip_through_config_json(replay, request):
 def test_each_loop_resolves_its_default_execution(
     quantlab_run, loop, execution, fee_model, slippage, init_cash
 ):
-    from quantlab_trader.quantlab_run import QuantlabRun
+    from quantlab_ibkr.quantlab_run import QuantlabRun
 
     venue = BacktestVenueConfig(execution).build(
         QuantlabRun.load(quantlab_run), ReplayRequest(BARS[0], BARS[-1], (10001,), Loop(loop))
@@ -189,7 +189,7 @@ def test_each_loop_resolves_its_default_execution(
 
 
 def test_the_open_loop_default_fee_is_the_runs_fraction(quantlab_run):
-    from quantlab_trader.quantlab_run import QuantlabRun
+    from quantlab_ibkr.quantlab_run import QuantlabRun
 
     venue = BacktestVenueConfig().build(
         QuantlabRun.load(quantlab_run), ReplayRequest(BARS[0], BARS[-1], (10001,), Loop.OPEN)

@@ -26,9 +26,9 @@ from quantlab.tracking.base import Tracker, TrackingRun
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
-from quantlab_trader.base.config import TraderConfig
-from quantlab_trader.runner import run
-from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+from quantlab_ibkr.base.config import TraderConfig
+from quantlab_ibkr.runner import run
+from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
 from tests.quantlab_run_fixture import build_constructor_run, build_quantlab_run
 from tests.test_open_loop_replay import BARS, CLOSE, OPEN, WEIGHTS
 

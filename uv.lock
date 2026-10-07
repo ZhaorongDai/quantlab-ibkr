@@ -3066,7 +3066,7 @@ dev = [
 ]
 
 [[package]]
-name = "quantlab-trader"
+name = "quantlab-ibkr"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

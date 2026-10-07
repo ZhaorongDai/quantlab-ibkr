@@ -36,9 +36,9 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab_trader.base.config import TraderConfig
-from quantlab_trader.runner import run
-from quantlab_trader.venue.backtest.venue import BacktestVenueConfig
+from quantlab_ibkr.base.config import TraderConfig
+from quantlab_ibkr.runner import run
+from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
 from tests.quantlab_run_fixture import build_quantlab_run
 
 NAN = np.nan
@@ -193,7 +193,7 @@ def test_a_membership_masked_price_dataset_is_refused(tmp_path):
 
 
 def test_the_cli_replays_a_quantlab_run_and_prints_the_run_directory(tmp_path, capsys):
-    from quantlab_trader.cli import main
+    from quantlab_ibkr.cli import main
 
     quantlab_run = build_quantlab_run(tmp_path / "quantlab", BARS, OPEN, CLOSE, WEIGHTS)
 
@@ -212,7 +212,7 @@ def test_the_cli_replays_a_quantlab_run_and_prints_the_run_directory(tmp_path, c
 
 
 def test_the_cli_runs_a_saved_trader_config(replay, tmp_path, capsys):
-    from quantlab_trader.cli import main
+    from quantlab_ibkr.cli import main
 
     saved = json.loads((replay["run_dir"] / "config.json").read_text())
     saved["output_dir"] = str(tmp_path)
@@ -226,12 +226,12 @@ def test_the_cli_runs_a_saved_trader_config(replay, tmp_path, capsys):
 
 
 def test_the_cli_reports_a_refused_run_without_a_traceback(tmp_path, capsys):
-    from quantlab_trader.cli import main
+    from quantlab_ibkr.cli import main
 
     status = main(["backtest", "--quantlab-run", str(tmp_path / "missing")])
 
     assert status == 1
-    assert "quantlab-trader:" in capsys.readouterr().err
+    assert "quantlab-ibkr:" in capsys.readouterr().err
 
 
 def test_every_next_open_order_of_a_bar_is_submitted_however_many(tmp_path):

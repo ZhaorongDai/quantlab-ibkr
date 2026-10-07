@@ -43,8 +43,8 @@ from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
-from quantlab_trader.parity.ladder import parity
-from quantlab_trader.venue.backtest.venue import ExecutionConfig
+from quantlab_ibkr.parity.ladder import parity
+from quantlab_ibkr.venue.backtest.venue import ExecutionConfig
 from tests.quantlab_run_fixture import ADJUSTED_SCALE, build_constructor_run, build_quantlab_run
 
 NAN = np.nan
@@ -461,7 +461,7 @@ def test_a_run_without_a_prediction_panel_has_no_closed_loop_block(full):
 
 
 def test_the_cli_writes_a_parity_report(tmp_path, capsys, full):
-    from quantlab_trader.cli import main
+    from quantlab_ibkr.cli import main
 
     run_dir, _ = full
 
@@ -479,10 +479,10 @@ def test_the_cli_writes_a_parity_report(tmp_path, capsys, full):
 
 
 def test_the_cli_refuses_a_directory_that_is_not_a_run(tmp_path, capsys):
-    from quantlab_trader.cli import main
+    from quantlab_ibkr.cli import main
 
     assert main(["parity", "--quantlab-run", str(tmp_path / "missing")]) == 1
-    assert "quantlab-trader:" in capsys.readouterr().err
+    assert "quantlab-ibkr:" in capsys.readouterr().err
 
 
 def test_l5_rounds_a_fee_at_half_a_cent_as_trader_does(tmp_path):
