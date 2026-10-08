@@ -145,3 +145,13 @@ for both, outside `outputs.py`, which owns trader's own run directory and its fi
 names. A run's window is its first and last simulated bar, so a replay window narrowed by
 `start`/`end` must lie within the bars the run simulated. `quantlab.core.component` stays on the allowlist for `get_cls_from_path` (a tracker named in
 a trader config).
+
+## Amended by ADR 0011 (#40)
+
+The allowlist of trader's own source is unchanged, and the ast scan still locks it: trader
+imports no `quantlab.factor` or `quantlab.risk` module by name. A rule declaring factors or a
+factor risk model brings both layers, and KunQuant among their dependencies, into the trader
+process at run time, by class path from the run's config. The boundary subprocess therefore
+forbids only `quantlab.model`, `quantlab.label`, `quantlab.backtest`, `torch`, `xgboost` and
+`vectorbt`, and runs a closed loop on a mean-variance rule with a factor risk model as well.
+The trader process is no longer the light one this record described.

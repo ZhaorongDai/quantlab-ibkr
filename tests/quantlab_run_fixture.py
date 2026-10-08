@@ -17,6 +17,15 @@ backtester assembles: tradability, the rebalance schedule, the rule's
 carrying the rule (so the run's recipe records it), and the panel written
 where a run with a model keeps its prediction panel (``PREDICTION_PANEL``).
 
+``build_factor_risk_run`` is a ``build_constructor_run`` whose rule is
+mean-variance on a real factor risk model (ADR 0011): quantlab's
+``Use4RiskModel`` over two styles and two industries
+(``tests/factor_risk_fixture.py``), its exposure variables written into the
+price store, its regression and estimate stores built in the temporary
+directory through quantlab's public risk API and read by a
+``FactorRiskStoreEstimator``, with bounds on the book's style exposures.
+Nothing about the forecast is stubbed.
+
 ``build_quantlab_run(member=...)`` instead runs on a membership-masked
 derived store, the way quantlab's ``sp500_*`` examples build
 ``members.zarr``: the CRSP panel's ``adj*``, ``close`` and ``volume``
@@ -31,7 +40,7 @@ fixed multiple of the raw one so a raw/adjusted mix-up shows in the numbers.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
 import numpy as np
@@ -43,11 +52,15 @@ from quantlab.backtest.predefined.weights import WeightsVectorBt
 from quantlab.backtest.config import CrossSectionBacktestConfig, WeightsBacktestConfig
 from quantlab.dataset.config import CrspDatasetConfig, DatasetConfig
 from quantlab.portfolio.base import PortfolioConstructor
+from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig, MeanVarianceConfig
+from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
+from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.runs.prediction_panel import LabelSpec, PredictionPanel
 from quantlab.tracking.base import Tracker
 from quantlab.dataset.crsp import CrspStockDataset
 from quantlab.dataset.stock import StockDataset
 from quantlab.portfolio.decision_inputs import DecisionInputs
+from tests.factor_risk_fixture import factor_risk_model, risk_model_variables
 
 #: Where a quantlab run with a model keeps its prediction panel; the fixture
 #: writes one into a model-free run (the one place outside quantlab that names
@@ -230,7 +243,7 @@ def build_constructor_run(
     open_: Mapping[int, Sequence[float]],
     close: Mapping[int, Sequence[float]],
     predictions: Mapping[str, Mapping[int, Sequence[float]]],
-    rule: PortfolioConstructor,
+    rule: PortfolioConstructor | Callable[[CrspStockDataset], PortfolioConstructor],
     labels: Sequence[LabelSpec],
     *,
     first_bar: int = 0,
@@ -245,11 +258,15 @@ def build_constructor_run(
     The store holds every bar of ``bars``; the run's window starts at
     ``bars[first_bar]`` (the bars before it are the rule's warm-up).
     ``predictions`` gives each label's prediction per PERMNO over the
-    window's bars. Returns the run directory and the ISO timestamps of the
-    bars ``DecisionInputs.weights`` held after a failure.
+    window's bars. ``rule`` may be a function of the price dataset, for a
+    rule built on it (a factor risk model's stores). Returns the run
+    directory and the ISO timestamps of the bars ``DecisionInputs.weights``
+    held after a failure.
     """
     root = Path(root)
     dataset = _crsp_dataset(root, bars, open_, close, variables=variables)
+    if not isinstance(rule, PortfolioConstructor):
+        rule = rule(dataset)
     window = bars[first_bar:]
     first, last = window[0], window[-1]
     prices = dataset.panel(first, last).load()
@@ -293,3 +310,58 @@ def build_constructor_run(
     # quantlab's BacktestRun.predictions reads a run's prediction panel.
     PredictionPanel(panel, labels).write(run_dir / PREDICTION_PANEL)
     return run_dir, failed
+
+
+def build_factor_risk_run(
+    root: Path,
+    bars: pd.DatetimeIndex,
+    open_: Mapping[int, Sequence[float]],
+    close: Mapping[int, Sequence[float]],
+    predictions: Mapping[str, Mapping[int, Sequence[float]]],
+    labels: Sequence[LabelSpec],
+    *,
+    first_bar: int,
+    exposure_bounds: Mapping[str, tuple[float, float]],
+    exposure_data_strategy: str = "read",
+    seed: int = 7,
+    **mean_variance,
+) -> tuple[Path, list[str]]:
+    """Write a closed-loop-ready quantlab run of mean-variance on a factor risk model.
+
+    ``build_constructor_run`` with the store carrying
+    ``risk_model_variables`` and the rule a ``MeanVarianceOptimizer`` whose
+    covariance is a ``FactorRiskStoreEstimator`` of ``factor_risk_model``,
+    with ``exposure_bounds`` on the risk model's exposures. The first label
+    is the expected return; ``mean_variance`` holds the remaining
+    ``MeanVarianceConfig`` fields (``risk_aversion`` and ``ic`` default to
+    5 and 0.05) and ``build_constructor_run``'s keywords.
+    """
+    root = Path(root)
+    run_fields = {
+        k: mean_variance.pop(k)
+        for k in ("rebalance_periods", "init_cash", "fees", "slippage")
+        if k in mean_variance
+    }
+    mean_variance = {"risk_aversion": 5.0, "ic": 0.05, **mean_variance}
+
+    def rule(dataset):
+        model = factor_risk_model(
+            root / "risk", dataset, bars, first_bar, exposure_data_strategy
+        )
+        return MeanVarianceOptimizer(
+            MeanVarianceConfig(
+                expected_return_label=labels[0].name,
+                covariance=FactorRiskStoreEstimator(
+                    FactorRiskStoreEstimatorConfig(risk_model=model)
+                ),
+                exposure_bounds=dict(exposure_bounds),
+                **mean_variance,
+            )
+        )
+
+    return build_constructor_run(
+        root, bars, open_, close, predictions, rule, labels,
+        first_bar=first_bar,
+        variables=risk_model_variables(sorted(close), len(bars), seed),
+        **run_fields,
+    )

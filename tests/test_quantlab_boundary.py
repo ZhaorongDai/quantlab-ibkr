@@ -8,13 +8,16 @@ Three locks:
   ``parity`` package alone may also import quantlab's backtest layer, to
   run the ladder's quantlab rungs (ADR 0007);
 - a subprocess that replays a fixture run through ``runner.run`` and then
-  finds none of quantlab's model, factor, label or backtest layers, nor torch,
-  xgboost, KunQuant or vectorbt, in ``sys.modules``, open loop and closed
-  loop (TopN; mean-variance with Ledoit-Wolf, which loads cvxpy), with the
-  command line imported (it imports the ``parity`` package only inside the
-  ``parity`` command), and no module of the ``parity`` package either. The
-  rule's, dataset's and tracker's modules may still load by class path from
-  the run's recipe;
+  finds none of quantlab's model, label or backtest layers, nor torch,
+  xgboost or vectorbt, in ``sys.modules``, open loop and closed loop (TopN;
+  mean-variance with Ledoit-Wolf, which loads cvxpy; mean-variance on a
+  factor risk model with bounded style exposures), with the command line
+  imported (it imports the ``parity`` package only inside the ``parity``
+  command), and no module of the ``parity`` package either. The rule's,
+  dataset's and tracker's modules may still load by class path from the
+  run's recipe, and so may quantlab's factor and risk layers (KunQuant
+  among their dependencies) for a rule declaring factors or a factor risk
+  model (ADR 0011);
 - a source scan of every trader module: no string literal names a file of a
   quantlab run directory (``config.json``, ``run.json``, ``metrics.json``,
   ``weights.zarr``, ``equity.zarr``, ``settlements.json``, ``predictions.zarr``,
@@ -42,7 +45,11 @@ from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
-from tests.quantlab_run_fixture import build_constructor_run, build_quantlab_run
+from tests.quantlab_run_fixture import (
+    build_constructor_run,
+    build_factor_risk_run,
+    build_quantlab_run,
+)
 
 PACKAGE = Path(__file__).resolve().parents[1] / "quantlab_ibkr"
 
@@ -61,15 +68,15 @@ ALLOWED = {
     "quantlab.utils.date_range",
 }
 
-#: Module prefixes that must never load in a trader process.
+#: Module prefixes that must never load in a trader process. quantlab's
+#: factor and risk layers (and KunQuant) may, by class path from a run's
+#: recipe (ADR 0011).
 FORBIDDEN = (
     "quantlab.model",
-    "quantlab.factor",
     "quantlab.label",
     "quantlab.backtest",
     "torch",
     "xgboost",
-    "KunQuant",
     "vectorbt",
 )
 
@@ -139,8 +146,29 @@ def _constructor_run(root, rule, warmup):
     return run_dir
 
 
+def _factor_risk_run(root):
+    # The risk model's volatility regime adjustment is warm after some 18
+    # regression bars; the window starts there.
+    bars = pd.bdate_range("2024-01-02", periods=24)
+    permnos = range(10001, 10009)
+    rng = np.random.default_rng(3)
+    close = {
+        p: list((20.0 + 3 * k) * np.exp(np.cumsum(rng.normal(0, 0.02, len(bars)))))
+        for k, p in enumerate(permnos)
+    }
+    run_dir, failed = build_factor_risk_run(
+        root, bars, close, close,
+        {"ret_5": {p: list(rng.normal(0, 0.01, 4)) for p in permnos}},
+        [LabelSpec("ret_5", "raw", 1, 5)],
+        first_bar=20, exposure_bounds={"style_a": (-0.2, 0.2)},
+    )
+    assert failed == []
+    return run_dir
+
+
 #: Each replay: its loop and how its quantlab run is built. The closed-loop
-#: rule's module (and mean-variance's cvxpy) loads by class path.
+#: rule's module (and mean-variance's cvxpy) loads by class path; so do the
+#: factor risk model's (quantlab's risk and factor layers).
 REPLAYS = {
     "open": ("open", _weights_run),
     "closed_topn": (
@@ -164,11 +192,12 @@ REPLAYS = {
             4,
         ),
     ),
+    "closed_factor_risk_model": ("closed", _factor_risk_run),
 }
 
 
 @pytest.mark.parametrize("replay", sorted(REPLAYS))
-def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path, replay):
+def test_a_replay_loads_no_model_label_backtest_or_heavy_library(tmp_path, replay):
     loop, build = REPLAYS[replay]
     quantlab_run = build(tmp_path / "quantlab")
     script = textwrap.dedent(
@@ -188,7 +217,8 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
             m for m in sys.modules
             if m == "quantlab_ibkr.parity" or m.startswith("quantlab_ibkr.parity.")
         ]
-        print(json.dumps({{"run_dir": str(run_dir), "loaded": loaded}}))
+        risk = "quantlab.risk.predefined.use4" in sys.modules
+        print(json.dumps({{"run_dir": str(run_dir), "loaded": loaded, "risk": risk}}))
         """
     )
 
@@ -206,6 +236,8 @@ def test_a_replay_loads_no_model_factor_label_backtest_or_heavy_library(tmp_path
     with xr.open_zarr(run_dir / "decisions.zarr") as decisions:
         assert decisions.sizes["timestamp"] > 0
     assert report["loaded"] == []
+    # The factor risk model's layer arrived by class path, from the run's recipe.
+    assert report["risk"] == (replay == "closed_factor_risk_model")
 
 
 def test_trader_assembles_no_decision_inputs_of_its_own():

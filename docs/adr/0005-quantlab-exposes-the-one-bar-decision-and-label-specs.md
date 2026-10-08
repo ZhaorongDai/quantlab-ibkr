@@ -108,3 +108,12 @@ schedule, and the rule keeps `decide`. `build_context` and `construct_panel` are
 run-time imports from quantlab are therefore `quantlab.portfolio.base` and
 `quantlab.portfolio.decision_inputs` for the decision. The rebalance anchor is settled: the
 prediction panel's first bar, the last bar never rebalancing.
+
+## Amended by ADR 0011 (#40)
+
+`required_factors()` is gone: a rule declares its factors and its factor risk model in one
+value, `declared_inputs()`, and quantlab's `DecisionInputs` hands their values at each bar in the
+context. trader no longer refuses such a rule: it loads quantlab's factor and risk layers by
+class path from the run's config and takes the factors, the exposures and the risk forecast
+from `DecisionInputs` unchanged. The consequence "trader v1 refuses such a rule" no longer
+holds; a closed loop is still refused for a run valued at raw prices.
