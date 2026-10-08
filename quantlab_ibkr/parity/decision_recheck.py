@@ -8,7 +8,9 @@ The rechecked weights must equal the decided ones bit for bit (a NaN, a
 kept holding, equal to a NaN), and a recorded hold must be rechecked as a
 failure with the same message. A bar that is not holding-independent is
 checked too, so a decision error is told apart from execution drift on
-every rebalance bar.
+every rebalance bar. The decision bars' window is read once
+(``ConstructorTargets.preloaded``), which decides exactly what reading it
+bar by bar decides.
 """
 
 from __future__ import annotations
@@ -67,11 +69,14 @@ def decision_recheck(run: QuantlabRun, closed_dir: Path) -> dict:
     decided = decisions["weight"].to_pandas()
     current = decisions["current_weight"].to_pandas()
     differing = []
-    for t in timestamps:
-        row = predictions.sel(timestamp=t, drop=True)
-        difference = _recheck_bar(t, targets, row, decided.loc[t], current.loc[t], failures.get(t))
-        if difference is not None:
-            differing.append(difference)
+    with targets.preloaded(timestamps[0], timestamps[-1]):
+        for t in timestamps:
+            row = predictions.sel(timestamp=t, drop=True)
+            difference = _recheck_bar(
+                t, targets, row, decided.loc[t], current.loc[t], failures.get(t)
+            )
+            if difference is not None:
+                differing.append(difference)
     return {
         "bars_checked": len(timestamps),
         "bars_differing": len(differing),

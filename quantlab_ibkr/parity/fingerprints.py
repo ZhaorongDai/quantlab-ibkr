@@ -7,9 +7,11 @@ hold, by digest alone, as quantlab compares.
 
 L0 re-runs the run's rebalance table through quantlab's engine, which reads
 the window's prices as the run did, so its record shares the run's price
-request. The closed loop records its own reads (``runner.run``), but a bar at
-a time: its requests are one bar each where the run's whole-panel path read
-the window in one request, so the two records share no request to compare.
+request. The closed loop records its own reads (``runner.run``), each as one
+request over the replay window it preloads; those need not be the run's own
+requests (a narrowed window, a price window from another first bar, an
+estimate read over every bar rather than the rebalance bars), so the two
+records are not compared directly.
 ``closed_loop_reread`` therefore re-reads, through the components the closed
 loop decided with (``ConstructorTargets.read_sources``), the run's own
 requests of every key the closed loop read, and that record is compared

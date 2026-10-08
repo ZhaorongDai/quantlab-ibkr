@@ -19,6 +19,7 @@ from __future__ import annotations
 import math
 from abc import ABC, abstractmethod
 from collections.abc import Hashable, Mapping
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 
 import numpy as np
@@ -306,6 +307,51 @@ class ConstructorTargets(TargetSource):
             xr.DataArray(held.to_numpy(dtype=float), dims="symbol", coords={"symbol": held.index}),
         )
         return self.decision_inputs.constructor.decide(context)
+
+    def preloaded(self, start: pd.Timestamp, end: pd.Timestamp) -> AbstractContextManager:
+        """Read the replay window once; inside, every bar's context is sliced from memory.
+
+        quantlab's ``DecisionInputs.preloaded`` over the window's bars from
+        ``start`` (or the anchor, when later: no earlier bar rebalances) to
+        ``end``: the prices with the rule's history, their tradability, the
+        declared factors and risk exposures are read once, through
+        quantlab's recorded reads, and the risk model's estimate store is
+        held in memory, so a decision opens no store and decides exactly
+        what it decides without the preload. A replay (the backtest venue's
+        closed loop, the Decision recheck) preloads; a live run does not.
+
+        Parameters
+        ----------
+        start, end : pandas.Timestamp
+            The replay window.
+
+        Returns
+        -------
+        contextlib.AbstractContextManager
+            Open while the replay decides.
+
+        Examples
+        --------
+        >>> from quantlab.portfolio.config import TopNConfig
+        >>> from quantlab.dataset.memory import FrameDataset
+        >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
+        >>> bars = pd.bdate_range("2024-01-02", periods=3)
+        >>> price = xr.DataArray(
+        ...     [[30.0, 40.0]] * 3, dims=("timestamp", "symbol"),
+        ...     coords={"timestamp": bars, "symbol": ["AAA", "BBB"]},
+        ... )
+        >>> source = ConstructorTargets(DecisionInputs(
+        ...     FrameDataset(xr.Dataset({"adjOpen": price, "adjClose": price})),
+        ...     TopNConstructor(TopNConfig(direction="long_only", top_n=1)),
+        ...     fill_column="adjOpen", valuation_column="adjClose",
+        ...     rebalance_periods=1, anchor=bars[0],
+        ... ))
+        >>> row = xr.Dataset({"ret": ("symbol", [0.3, 0.1])}, coords={"symbol": ["AAA", "BBB"]})
+        >>> with source.preloaded(bars[0], bars[-1]):
+        ...     source.decide(bars[1], row, pd.Series(dtype=float)).weights.values.tolist()
+        [1.0, 0.0]
+        """
+        return self.decision_inputs.preloaded(max(start, self.decision_inputs.anchor), end)
 
     def read_sources(self) -> list[tuple[object, str]]:
         """Return the components the rule's contexts read, each with the key quantlab records it under.
