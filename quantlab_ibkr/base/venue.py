@@ -262,6 +262,23 @@ class InstrumentResolver(ABC):
         10107
         """
 
+    def resolves(self, instrument_id: InstrumentId) -> bool:
+        """Return whether ``permno`` maps ``instrument_id`` back to a PERMNO.
+
+        An account position on an instrument the resolver does not map (a
+        broker holding no symbol maps to, ADR 0004) is left out of the
+        strategy's holdings; the venue reports it. Every instrument maps by
+        default.
+
+        Examples
+        --------
+        >>> from quantlab_ibkr.venue.backtest.resolver import BacktestResolver
+        >>> resolver = BacktestResolver([10107], pd.Timestamp("2024-01-02"))
+        >>> resolver.resolves(resolver.instrument_id(10107, pd.Timestamp("2024-01-02")))
+        True
+        """
+        return True
+
     @abstractmethod
     def instruments(self) -> Sequence[Instrument]:
         """Return every instrument the venue trades in this run.

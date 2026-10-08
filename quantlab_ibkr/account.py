@@ -3,8 +3,16 @@
 Read from nautilus's ``Cache``, which presents one account interface in the
 backtest and live. Cash is *derived*: a MARGIN account's balance does not
 deduct the cost of open positions, so cash is the balance minus
-``sum(signed_qty * avg_px_open)`` over open positions. nautilus's unrealised
+``sum(signed_qty * avg_px_open)`` over open positions. A broker that reports
+its cash in the account state takes precedence: IBKR's balance is the net
+liquidation value, and its account state carries ``TotalCashValue`` (the
+nautilus IB adapter's ``info``), which is the cash. nautilus's unrealised
 PnL is never used; equity is marked by the decision cycle at t's raw close.
+
+A position on an instrument the venue's resolver does not map to a PERMNO
+(an IBKR holding no symbol maps to, ADR 0004) is left out of the holdings;
+its value is then outside the equity the strategy sizes against, and the
+venue reports it.
 """
 
 from __future__ import annotations
@@ -12,6 +20,10 @@ from __future__ import annotations
 from collections.abc import Hashable
 
 from quantlab_ibkr.base.venue import InstrumentResolver
+
+#: The key of the cash a broker reports in its account state's ``info``
+#: (the nautilus IB adapter's ``TotalCashValue``).
+REPORTED_CASH = "TotalCashValue"
 
 
 def holdings(cache, resolver: InstrumentResolver) -> dict[Hashable, int]:
@@ -27,7 +39,9 @@ def holdings(cache, resolver: InstrumentResolver) -> dict[Hashable, int]:
     Returns
     -------
     dict
-        Signed share counts by PERMNO; flat positions are left out.
+        Signed share counts by PERMNO; flat positions, and positions on an
+        instrument ``resolver`` does not map (``resolver.resolves``), are
+        left out.
 
     Examples
     --------
@@ -50,14 +64,14 @@ def holdings(cache, resolver: InstrumentResolver) -> dict[Hashable, int]:
         # Read from the decimal, as on_order_filled reads fills: the float
         # signed_qty is inexact for many share counts.
         quantity = int(position.signed_decimal_qty())
-        if quantity:
+        if quantity and resolver.resolves(position.instrument_id):
             permno = resolver.permno(position.instrument_id)
             held[permno] = held.get(permno, 0) + quantity
     return held
 
 
 def derived_cash(cache) -> float:
-    """Return the account's cash: margin balance minus the open positions' cost.
+    """Return the account's cash: the broker's reported cash, else balance minus positions' cost.
 
     Parameters
     ----------
@@ -84,6 +98,10 @@ def derived_cash(cache) -> float:
     if len(accounts) != 1:
         raise ValueError(f"expected one account, found {len(accounts)}")
     account = accounts[0]
+    event = account.last_event
+    reported = None if event is None else (event.info or {}).get(REPORTED_CASH)
+    if reported is not None:
+        return float(reported)
     balance = account.balance_total(account.base_currency).as_double()
     cost = sum(
         float(position.signed_decimal_qty()) * position.avg_px_open

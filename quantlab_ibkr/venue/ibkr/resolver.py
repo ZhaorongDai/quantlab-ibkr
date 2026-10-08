@@ -313,6 +313,19 @@ class IbkrResolver(InstrumentResolver):
         except KeyError:
             raise UnresolvedSymbol(f"no symbol maps to {instrument_id}") from None
 
+    def resolves(self, instrument_id: InstrumentId) -> bool:
+        """Return whether a resolved contract has this id, so ``permno`` maps it.
+
+        Examples
+        --------
+        >>> resolver = _doctest_resolver()
+        >>> resolver.resolves(InstrumentId.from_str("META.NASDAQ"))
+        True
+        >>> resolver.resolves(InstrumentId.from_str("XYZ.NYSE"))
+        False
+        """
+        return instrument_id in self._permnos
+
     def permno_for_con_id(self, con_id: int) -> Hashable:
         """Return the symbol of IBKR contract ``con_id``, from this or an earlier run.
 

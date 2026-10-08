@@ -1,5 +1,5 @@
 ---
-status: accepted, amended 2026-10-04 (quantlab ADR 0020), 2026-10-08 (ADR 0011; #43, `quantlab.runs.record` allowed), 2026-10-08 (#48, `quantlab.runs.live_predictions` allowed)
+status: accepted, amended 2026-10-04 (quantlab ADR 0020), 2026-10-08 (ADR 0011; #43, `quantlab.runs.record` allowed), 2026-10-08 (#48, `quantlab.runs.live_predictions` allowed; #50, `venue/ibkr/` and `InstrumentResolver.resolves`)
 date: 2026-10-01
 ---
 
@@ -30,7 +30,9 @@ quantlab_ibkr/
   cli.py                `quantlab-ibkr backtest` (and `parity`, #9)
   venue/backtest/       venue.py (BacktestVenue), feed.py, resolver.py, submitter.py,
                         source.py, clock.py, fees.py, fills.py, corporate_actions.py
-  venue/ibkr/           not created in v1; the live effort's package
+  venue/ibkr/           the live venue (#47): venue.py (IbkrVenue, a TradingNode with IBKR's
+                        clients), resolver.py, contracts.py, submitter.py (MKT/OPG),
+                        source.py (the live prediction store's row of t), clock.py
 ```
 
 Every top-level entry of `venue/` is a venue, as every top-level entry of quantlab's `dataset/`
@@ -45,7 +47,10 @@ are not parts: they are inside the backtest venue, because live they are the bro
 charges the commission, fills the auction and books splits and dividends). The account is not a
 part either: nautilus's Cache and Portfolio already present one account interface in backtest and
 live, and `account.py` computes equity as cash plus each position at the raw close of t, the same
-number the order sizing uses, in both modes.
+number the order sizing uses, in both modes. Live, the cash is the one IBKR reports
+(`TotalCashValue` in the IB adapter's account state, since IBKR's balance is the net liquidation
+value), and a position no symbol maps to is left out of the holdings (`InstrumentResolver.resolves`)
+and reported by the venue (#50).
 
 **The decision core is nautilus-free.** `DecisionCycle.run(inputs, positions, cash)` returns the
 `Decision` and the sized orders (`trunc(w * equity / close) - position`, sells first, NaN weight =
