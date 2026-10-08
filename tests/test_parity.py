@@ -469,6 +469,52 @@ def test_a_mean_variance_rule_with_a_min_trade_is_not_holding_independent(tmp_pa
     assert block["holding_independent_bars_equal"] == 0
 
 
+def test_a_mean_variance_rule_with_a_candidate_top_k_is_not_holding_independent(tmp_path):
+    # The pool is the top k plus every held symbol: holdings decide which
+    # symbols are optimised, so no bar is compared bit for bit (#46).
+    rule = MeanVarianceOptimizer(
+        MeanVarianceConfig(
+            expected_return_label="ret_5",
+            covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
+            risk_aversion=5.0,
+            ic=0.05,
+            weight_cap=0.6,
+            candidate_top_k=2,
+        )
+    )
+    _, (report, _) = _constructor_run(tmp_path, rule, 18, 6)
+    block = report["closed_vs_open"]
+
+    assert not block["holding_independent_rule"]
+    assert block["rebalance_bars_compared"] > 0
+    assert block["holding_independent_bars"] == 0
+    assert block["holding_independent_bars_equal"] == 0
+
+
+def test_a_held_symbol_without_a_prediction_takes_its_bar_out_of_the_comparison(tmp_path):
+    # A held symbol without a prediction enters the problem with mu = 0, an
+    # unheld one does not (#46). 10004 lacks a prediction on the first
+    # rebalance bar, when nothing is held (still compared), and on the
+    # third, when both books hold it (left out).
+    n_bars, first_bar = 18, 6
+    rng = np.random.default_rng(2)
+    predictions = {p: list(rng.normal(0, 0.01, n_bars - first_bar)) for p in CLOSED_PERMNOS}
+    predictions[10004][0] = predictions[10004][4] = NAN
+    _, (report, _) = _constructor_run(
+        tmp_path, _mean_variance(), n_bars, first_bar, predictions=predictions
+    )
+    block = report["closed_vs_open"]
+    closed = Path(report["inputs"]["closed_loop_run"])
+    with xr.open_zarr(closed / "decisions.zarr") as decisions:
+        current = decisions["current_weight"].sel(symbol=10004).load().to_pandas()
+    bar = pd.bdate_range("2024-01-02", periods=n_bars)[first_bar + 4]
+
+    assert current.iloc[0] == 0.0 and current.loc[bar] != 0.0  # the premise
+    assert block["holding_independent_rule"]
+    assert block["holding_independent_bars"] == block["rebalance_bars_compared"] - 1
+    assert report["checks"]["closed_weights_equal_on_holding_independent_bars"]["passed"]
+
+
 def _holding_dependent_mean_variance(weight_cap=0.6):
     return MeanVarianceOptimizer(
         MeanVarianceConfig(
