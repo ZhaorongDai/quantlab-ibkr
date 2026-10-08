@@ -5,7 +5,12 @@
 - ``config.json``: the ``TraderConfig`` plus records of the quantlab run (its
   data fingerprints);
 - ``decisions.zarr``: ``weight`` on ``(timestamp, symbol)``, one row per
-  decision, in rebalance-table format (comparable with ``weights.zarr``);
+  decision, in rebalance-table format (comparable with ``weights.zarr``),
+  and ``current_weight`` on the same axes, the current weights the cycle
+  handed the rule at that decision: each holding's value at t's raw close
+  over equity, 0 on a decided symbol not held, NaN on a symbol outside the
+  bar's decision (a closed-loop decision's symbols include every holding).
+  The parity report's **Decision recheck** runs the rule again on them;
 - ``holdings.zarr``: ``holding`` on ``(timestamp, symbol)``, the actual book
   at each close (each holding's value over equity, 0 when not held, every
   decided symbol included), quantlab's layout, which the report's Holdings
@@ -123,6 +128,7 @@ class RunRecorder:
         self._cycles: list[CycleRecord] = []
         self._fills: list[dict] = []
         self._decisions: dict[pd.Timestamp, pd.Series] = {}
+        self._current: dict[pd.Timestamp, pd.Series] = {}
         self._equity: dict[pd.Timestamp, float] = {}
         self._orders: list[dict] = []
         self._order_rows: dict[tuple[Hashable, pd.Timestamp], int] = {}
@@ -164,9 +170,9 @@ class RunRecorder:
         if result.decision is None:
             return
         weights = result.decision.weights
-        self._decisions[t] = pd.Series(
-            weights.values, index=[python_scalar(v) for v in weights["symbol"].values]
-        )
+        symbols = [python_scalar(v) for v in weights["symbol"].values]
+        self._decisions[t] = pd.Series(weights.values, index=symbols)
+        self._current[t] = result.current_weights.reindex(symbols, fill_value=0.0).astype(float)
         if result.decision.failure is not None:
             self._events.append(
                 {"type": "hold", "timestamp": _day(t), "failure": result.decision.failure}
@@ -629,16 +635,23 @@ class RunRecorder:
         path.write_text(json.dumps(config, indent=2))
 
     def _decisions_dataset(self) -> xr.Dataset:
+        """``weight`` and ``current_weight`` on ``(timestamp, symbol)``, one row per decision."""
         if not self._decisions:
-            weight = xr.DataArray(
+            empty = xr.DataArray(
                 np.empty((0, 0)), dims=("timestamp", "symbol"),
                 coords={"timestamp": pd.DatetimeIndex([]), "symbol": []},
             )
-        else:
-            frame = pd.DataFrame(self._decisions).T.sort_index()
-            frame.index.name, frame.columns.name = "timestamp", "symbol"
-            weight = xr.DataArray(frame.astype(float), dims=("timestamp", "symbol"))
-        return xr.Dataset({"weight": weight})
+            return xr.Dataset({"weight": empty, "current_weight": empty})
+        frame = pd.DataFrame(self._decisions).T.sort_index()
+        frame.index.name, frame.columns.name = "timestamp", "symbol"
+        current = pd.DataFrame(self._current).T.reindex(index=frame.index, columns=frame.columns)
+        current.index.name, current.columns.name = "timestamp", "symbol"
+        return xr.Dataset(
+            {
+                "weight": xr.DataArray(frame.astype(float), dims=("timestamp", "symbol")),
+                "current_weight": xr.DataArray(current.astype(float), dims=("timestamp", "symbol")),
+            }
+        )
 
     def _holdings_dataset(self, decisions: xr.Dataset) -> xr.Dataset:
         """``holding`` on ``(timestamp, symbol)``: each holding's value at the close over equity.

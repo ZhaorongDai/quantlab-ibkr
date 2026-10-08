@@ -42,9 +42,15 @@ The report directory ``<output_dir>/<run name>_parity_<stamp>/`` holds:
   ``closed_loop_refused``, why a run with a prediction panel was not replayed
   closed-loop: ``ClosedLoopRefused``'s message, else ``None``), the end checks
   (``L0_equals_run``, ``T_equals_L5`` and, when the run can be replayed
-  closed-loop, ``closed_weights_equal_on_holding_independent_bars``) with
-  their maximum errors, one row per rung with its delta to the rung above,
-  and the closed-versus-open block;
+  closed-loop, ``closed_weights_equal_on_holding_independent_bars`` and
+  ``decision_recheck``) with their maximum errors, one row per rung with its
+  delta to the rung above, and the closed-versus-open block, whose
+  ``decision_recheck`` part is the **Decision recheck**: every closed-loop
+  decision bar decided again by quantlab's rule from the run's
+  ``DecisionInputs``, the bar's prediction row and the current weights the
+  closed loop handed the rule, which must give the decided weights bit for
+  bit (``bars_checked``, ``bars_differing`` and, per differing bar, the
+  symbols with both weights);
 - ``parity.zarr``: ``equity`` on ``(rung, timestamp)`` and, closed loop,
   ``closed_equity`` on ``timestamp``;
 - ``trader/``: the trader run directories T (and the closed loop) wrote.
@@ -61,6 +67,7 @@ This module is the ladder's driver; each step is a module of the package:
 ``trader_rung``        T and the closed loop, read from their run directories
 ``checks``             the end checks (``L0_equals_run``, ``T_equals_L5``)
 ``closed_loop``        the closed-versus-open block
+``decision_recheck``   its Decision recheck
 ``report``             the statistics rows, ``parity.json`` and ``parity.zarr``
 =====================  ===================================================
 """
@@ -77,6 +84,7 @@ from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.base.venue import Loop
 from quantlab_ibkr.parity.checks import l0_check, t_check
 from quantlab_ibkr.parity.closed_loop import closed_vs_open
+from quantlab_ibkr.parity.decision_recheck import decision_recheck
 from quantlab_ibkr.parity.market import Market
 from quantlab_ibkr.parity.quantlab_rungs import quantlab_rung
 from quantlab_ibkr.parity.report import Statistics, report_dir, rung_rows, write_report
@@ -219,6 +227,12 @@ def _ladder_end(run, table, market, rungs, execution, partial: Path, parity_dir:
             == loops["holding_independent_bars"],
             "bars": loops["holding_independent_bars"],
             "bars_equal": loops["holding_independent_bars_equal"],
+        }
+        recheck = loops["decision_recheck"] = decision_recheck(run, closed_dir)
+        checks["decision_recheck"] = {
+            "passed": recheck["bars_differing"] == 0,
+            "bars_checked": recheck["bars_checked"],
+            "bars_differing": recheck["bars_differing"],
         }
     report = {
         "format_version": 1,

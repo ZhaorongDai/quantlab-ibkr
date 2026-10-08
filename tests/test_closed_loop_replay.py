@@ -13,6 +13,7 @@ What is locked here (ADR 0007, ADR 0008):
   same execution block give identical orders and equity;
 - rebalance bars are counted from the panel's first timestamp, and
   narrowing the window does not move them;
+- ``decisions.zarr`` records the current weights handed to the rule;
 - a rule's failure is a hold, recorded with its message;
 - runs trader cannot replay closed-loop are refused.
 """
@@ -174,6 +175,18 @@ def test_decided_weights_equal_the_run_rebalance_table_bit_for_bit(rule_name, tm
     decided, expected, _ = _decided_and_table(replays)
 
     assert np.array_equal(decided.values, expected.values)
+
+
+def test_decisions_record_the_current_weights_handed_to_the_rule(replays):
+    decisions = _zarr(replays["closed"] / "decisions.zarr")
+    holdings = _zarr(replays["closed"] / "holdings.zarr")["holding"]
+    current = decisions["current_weight"].transpose("timestamp", "symbol")
+
+    # The book at each decision's close: each holding's value over equity, 0 when not held.
+    expected = holdings.sel(timestamp=current["timestamp"], symbol=current["symbol"])
+    assert np.array_equal(current.values, expected.transpose(*current.dims).values)
+    assert (current.isel(timestamp=0) == 0.0).all()
+    assert (current.isel(timestamp=slice(1, None)) > 0.0).any()
 
 
 def test_closed_and_open_loop_give_identical_orders_and_equity(replays):

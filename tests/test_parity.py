@@ -12,7 +12,10 @@ per bar). What is locked here, on synthetic model-free quantlab runs:
 - the rung identities: L2 = L1 when no buy is cash-capped, L3 = L2 without
   corporate actions, L4 = L3 with integral sizes, L5 = L4 up to rounding
   under the fraction fee model;
-- closed-loop weights equal ``weights.zarr`` on holding-independent bars.
+- closed-loop weights equal ``weights.zarr`` on holding-independent bars;
+- the Decision recheck: quantlab's rule, run again on every closed-loop
+  decision's context (the recorded current weights included), gives the
+  decided weights bit for bit, a hold included, and names a bar that does not.
 
 The full market below has, in raw prices (``--`` no price):
 
@@ -31,6 +34,7 @@ The full market below has, in raw prices (``--`` no price):
 """
 
 import json
+import shutil
 from pathlib import Path
 
 import numpy as np
@@ -43,8 +47,13 @@ from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
+from quantlab.tracking.base import NullTracker
+from quantlab_ibkr import runner
+from quantlab_ibkr.base.config import TraderConfig
+from quantlab_ibkr.parity.decision_recheck import decision_recheck
 from quantlab_ibkr.parity.ladder import parity
-from quantlab_ibkr.venue.backtest.venue import ExecutionConfig
+from quantlab_ibkr.quantlab_run import QuantlabRun
+from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
 from tests.quantlab_run_fixture import ADJUSTED_SCALE, build_constructor_run, build_quantlab_run
 
 NAN = np.nan
@@ -384,8 +393,11 @@ def _random_market(n_bars, seed=1):
     return open_, close
 
 
-def _constructor_run(root, rule, n_bars, first_bar, *, predictions=None, halt=None):
-    """A closed-loop-ready run; ``halt=(permno, bar)`` takes that bar's prices away."""
+def _constructor_run(root, rule, n_bars, first_bar, *, predictions=None, halt=None, with_parity=True):
+    """A closed-loop-ready run and its parity report; ``halt=(permno, bar)`` takes that bar's prices away.
+
+    ``with_parity=False`` returns the run directory alone.
+    """
     bars = pd.bdate_range("2024-01-02", periods=n_bars)
     open_, close = _random_market(n_bars)
     if halt is not None:
@@ -398,6 +410,8 @@ def _constructor_run(root, rule, n_bars, first_bar, *, predictions=None, halt=No
         root / "quantlab", bars, open_, close, {"ret_5": predictions}, rule, LABELS,
         first_bar=first_bar, rebalance_periods=2, init_cash=100_000.0,
     )
+    if not with_parity:
+        return run_dir
     return run_dir, _report(parity(run_dir, output_dir=root / "parity"))
 
 
@@ -449,6 +463,114 @@ def test_a_mean_variance_rule_with_a_min_trade_is_not_holding_independent(tmp_pa
     assert block["rebalance_bars_compared"] > 0
     assert block["holding_independent_bars"] == 0
     assert block["holding_independent_bars_equal"] == 0
+
+
+def _holding_dependent_mean_variance(weight_cap=0.6):
+    return MeanVarianceOptimizer(
+        MeanVarianceConfig(
+            expected_return_label="ret_5",
+            covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
+            risk_aversion=5.0,
+            ic=0.05,
+            weight_cap=weight_cap,
+            turnover_penalty=0.002,
+        )
+    )
+
+
+@pytest.fixture(scope="module")
+def turnover(tmp_path_factory):
+    """A mean-variance run with a turnover penalty: its decisions depend on holdings."""
+    root = tmp_path_factory.mktemp("parity_turnover")
+    run_dir, (report, _) = _constructor_run(root, _holding_dependent_mean_variance(), 18, 6)
+    return run_dir, report
+
+
+def _tampered(report, root, variable, bar, change):
+    """Copy the report's closed-loop run with ``change`` applied to ``variable``'s row ``bar``."""
+    closed = Path(report["inputs"]["closed_loop_run"])
+    copy = root / "tampered"
+    shutil.copytree(closed, copy)
+    with xr.open_zarr(closed / "decisions.zarr") as data:
+        decisions = data.load()
+    row = decisions[variable].isel(timestamp=bar).values
+    decisions[variable][dict(timestamp=bar)] = change(row)
+    decisions.to_zarr(copy / "decisions.zarr", mode="w")
+    return copy, pd.Timestamp(decisions["timestamp"].values[bar]).strftime("%Y-%m-%d")
+
+
+def test_the_decision_recheck_passes_for_a_holding_dependent_rule(turnover):
+    _, report = turnover
+    block = report["closed_vs_open"]
+    recheck = block["decision_recheck"]
+
+    assert not block["holding_independent_rule"]
+    assert recheck["bars_checked"] == block["rebalance_bars_compared"] > 1
+    assert recheck["bars_differing"] == 0 and recheck["differing_bars"] == []
+    assert report["checks"]["decision_recheck"] == {
+        "passed": True, "bars_checked": recheck["bars_checked"], "bars_differing": 0,
+    }
+
+
+def _nudge_held(row):
+    held = np.isfinite(row) & (row != 0.0)
+    return np.where(held, row * 0.5, row)
+
+
+def _nudge_traded(row):
+    traded = np.flatnonzero(np.isfinite(row))[0]
+    row = row.copy()
+    row[traded] += 0.01
+    return row
+
+
+@pytest.mark.parametrize(
+    "variable, change", [("current_weight", _nudge_held), ("weight", _nudge_traded)]
+)
+def test_a_tampered_decision_bar_fails_the_recheck_and_is_named(turnover, tmp_path, variable, change):
+    run_dir, report = turnover
+    bar = 2  # a later rebalance bar, when the closed loop holds a book
+    tampered, day = _tampered(report, tmp_path, variable, bar, change)
+
+    recheck = decision_recheck(QuantlabRun.load(run_dir), tampered)
+
+    assert recheck["bars_checked"] == report["closed_vs_open"]["decision_recheck"]["bars_checked"]
+    assert recheck["bars_differing"] == 1
+    (differing,) = recheck["differing_bars"]
+    assert differing["timestamp"] == day
+    assert differing["symbols"]
+    assert all(s["decided"] != s["rechecked"] for s in differing["symbols"])
+
+
+def test_a_hold_is_rechecked_as_a_failure_with_the_same_message(tmp_path):
+    # Four symbols under a 0.2 cap cannot hold a fully invested book: every bar
+    # holds. The run never trades, so its closed loop is replayed on its own.
+    run_dir = _constructor_run(
+        tmp_path, _holding_dependent_mean_variance(weight_cap=0.2), 18, 6, with_parity=False
+    )
+    closed = runner.run(
+        TraderConfig(
+            quantlab_run=str(run_dir), venue=BacktestVenueConfig(ExecutionConfig()),
+            loop="closed", output_dir=str(tmp_path / "trader"), tracker=NullTracker(),
+        )
+    )
+    recheck = decision_recheck(QuantlabRun.load(run_dir), closed)
+    assert recheck["bars_checked"] > 0 and recheck["bars_differing"] == 0
+
+    events = json.loads((closed / "events.json").read_text())
+    hold = next(e for e in events["events"] if e["type"] == "hold")
+    message = hold["failure"]
+    hold["failure"] = "another message"
+    copy = tmp_path / "tampered"
+    shutil.copytree(closed, copy)
+    (copy / "events.json").write_text(json.dumps(events))
+
+    recheck = decision_recheck(QuantlabRun.load(run_dir), copy)
+
+    (differing,) = recheck["differing_bars"]
+    assert differing["timestamp"] == hold["timestamp"][:10]
+    assert differing["failure"] == {"decided": "another message", "rechecked": message}
+    assert "symbols" not in differing
 
 
 def test_a_locked_position_takes_its_bar_out_of_the_closed_loop_comparison(tmp_path):
