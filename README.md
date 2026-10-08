@@ -122,14 +122,21 @@ holds `con_ids.json` (the conId cache) and `decision_recheck.json`.
 
 A day skipped entirely leaves no equity row for its bar. The next decide marks the next bar.
 
-A cron schedule on the server, in New York time (`CRON_TZ`). Run decide after the prediction job has appended t.
-The prediction job holds the day when the vendor is late.
+`scripts/live_daily.sh` runs a live day on the server. Debian's cron has no `CRON_TZ`, so cron calls
+it every hour and the script checks the New York time itself (daylight saving needs no edit):
 
 ```
-CRON_TZ=America/New_York
-35 8  * * 1-5  cd ~/projects/quantlab-ibkr && TWS_ACCOUNT=DU1234567 .venv/bin/quantlab-ibkr live decide /data/quantlab/live/sp500_xgb_mvo/live.json
-0  10 * * 1-5  cd ~/projects/quantlab-ibkr && TWS_ACCOUNT=DU1234567 .venv/bin/quantlab-ibkr live record /data/quantlab/live/sp500_xgb_mvo/live.json
+0 * * * * $HOME/projects/quantlab-ibkr/scripts/live_daily.sh
 ```
+
+- 06:00 ET: Sharadar's `update.py`, then quantlab's daily prediction job, each retried every 15
+  minutes until 08:30 ET; from 08:35 ET, `live decide`. A step that has not succeeded by its
+  cut-off holds the day: no order is sent on stale data.
+- 10:00 ET: `live record` (IBKR's fills, then the Decision recheck).
+- Weekends are skipped; on a market holiday decide finds t already decided and does nothing.
+- Credentials come from owner-only files: `~/.config/quantlab/sharadar.env` (`SHARADAR_API_KEY`)
+  and `~/.config/quantlab/ibkr.env` (`TWS_ACCOUNT`). Logs go to `<live dir>/logs/<date>.log`.
+- `scripts/live_daily.sh morning` or `record` runs one step now.
 
 ```
 uv sync
