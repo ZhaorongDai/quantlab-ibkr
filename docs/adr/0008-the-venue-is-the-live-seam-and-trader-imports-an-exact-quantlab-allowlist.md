@@ -1,5 +1,5 @@
 ---
-status: accepted, amended 2026-10-04 (quantlab ADR 0020)
+status: accepted, amended 2026-10-04 (quantlab ADR 0020), 2026-10-08 (ADR 0011)
 date: 2026-10-01
 ---
 

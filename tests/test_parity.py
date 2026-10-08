@@ -627,10 +627,12 @@ def test_a_run_trader_cannot_replay_closed_loop_still_gets_its_ladder(tmp_path):
     assert report["checks"]["T_equals_L5"]["passed"]
 
 
-def test_a_run_whose_rule_declares_a_factor_risk_model_gets_its_closed_loop_block(tmp_path):
+@pytest.mark.parametrize("turnover_penalty", [0.0, 0.002])
+def test_a_run_whose_rule_declares_a_factor_risk_model_gets_its_closed_loop_block(tmp_path, turnover_penalty):
     # Mean-variance on a factor risk model, its style exposures bounded (ADR
-    # 0011); turnover penalty and min_trade 0, so every rebalance bar is
-    # holding-independent.
+    # 0011). Without a turnover penalty every rebalance bar is
+    # holding-independent; with one, the Decision recheck alone proves the
+    # closed loop's decisions are quantlab's.
     n_bars, first_bar = 36, 20  # the risk model's volatility regime adjustment warms up
     permnos = tuple(range(10001, 10011))
     bars = pd.bdate_range("2024-01-02", periods=n_bars)
@@ -644,7 +646,7 @@ def test_a_run_whose_rule_declares_a_factor_risk_model_gets_its_closed_loop_bloc
         tmp_path / "quantlab", bars, open_, close,
         {"ret_5": {p: list(rng.normal(0, 0.01, n_bars - first_bar)) for p in permnos}}, LABELS,
         first_bar=first_bar, exposure_bounds={"style_a": (-0.1, 0.1)},
-        rebalance_periods=2, init_cash=100_000.0,
+        rebalance_periods=2, init_cash=100_000.0, turnover_penalty=turnover_penalty,
     )
 
     report, data = _report(parity(run_dir, output_dir=tmp_path / "parity"))
@@ -653,9 +655,17 @@ def test_a_run_whose_rule_declares_a_factor_risk_model_gets_its_closed_loop_bloc
     assert report["inputs"]["closed_loop_refused"] is None
     assert report["inputs"]["closed_loop_run"] is not None
     block = report["closed_vs_open"]
-    assert block["holding_independent_rule"]
-    assert block["rebalance_bars_compared"] == block["holding_independent_bars"] > 0
-    assert report["checks"]["closed_weights_equal_on_holding_independent_bars"]["passed"]
+    if turnover_penalty == 0.0:
+        assert block["holding_independent_rule"]
+        assert block["rebalance_bars_compared"] == block["holding_independent_bars"] > 0
+        assert report["checks"]["closed_weights_equal_on_holding_independent_bars"]["passed"]
+    else:
+        assert not block["holding_independent_rule"]
+        assert block["holding_independent_bars"] == 0
+    recheck = block["decision_recheck"]
+    assert recheck["bars_checked"] == block["rebalance_bars_compared"] > 0
+    assert recheck["bars_differing"] == 0
+    assert report["checks"]["decision_recheck"]["passed"]
     assert "closed_equity" in data
 
 
