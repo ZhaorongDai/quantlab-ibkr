@@ -129,9 +129,10 @@ it every hour and the script checks the New York time itself (daylight saving ne
 0 * * * * $HOME/projects/quantlab-ibkr/scripts/live_daily.sh
 ```
 
-- 06:00 ET: Sharadar's `update.py`, then quantlab's daily prediction job, each retried every 15
-  minutes until 08:30 ET; from 08:35 ET, `live decide`. A step that has not succeeded by its
-  cut-off holds the day: no order is sent on stale data.
+- 06:00 ET: Sharadar's `update.py --rebuild-dropped`, then quantlab's daily prediction job; the
+  pair is retried every 15 minutes until the job has t's row or 08:30 ET passes (a vendor table a
+  day late, such as SP500 membership, is waited for); from 08:35 ET, `live decide`. A morning
+  without t's row by 08:30 holds the day: no order is sent on stale data.
 - 10:00 ET: `live record` (IBKR's fills, then the Decision recheck).
 - Weekends are skipped; on a market holiday decide finds t already decided and does nothing.
 - Credentials come from owner-only files: `~/.config/quantlab/sharadar.env` (`SHARADAR_API_KEY`)

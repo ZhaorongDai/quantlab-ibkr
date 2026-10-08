@@ -6,9 +6,14 @@
 #
 #   0 * * * * $HOME/projects/quantlab-ibkr/scripts/live_daily.sh
 #
-# 06 ET  morning: Sharadar update.py, then quantlab's daily prediction job,
-#        each retried every RETRY_MINUTES until MORNING_CUTOFF; then, from
-#        DECIDE_AT, `quantlab-ibkr live decide` (market-on-open orders).
+# 06 ET  morning: Sharadar update.py (--rebuild-dropped), then quantlab's
+#        daily prediction job; the pair is retried every RETRY_MINUTES until
+#        the job has t's row or MORNING_CUTOFF passes (a late vendor table,
+#        such as SP500 membership a day behind SEP, is waited for, never
+#        carried forward); then, from DECIDE_AT, `quantlab-ibkr live decide`.
+#        update.py's own exit status does not stop the morning: a store the
+#        strategy does not read may fail, and the job checks every input it
+#        reads holds t.
 # 10 ET  record: `quantlab-ibkr live record` (fills, then the Decision recheck).
 #
 # A step that has not succeeded by its cut-off holds the day: no order is
@@ -66,8 +71,15 @@ retry_until_cutoff() {
 update_sharadar() {
     (load_env "$HOME/.config/quantlab/sharadar.env"
      cd "$QUANTLAB_DIR" &&
-     QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" scripts/sharadar/update.py \
+     QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" scripts/sharadar/update.py --rebuild-dropped \
          --download-dir "$DATA_DIR/downloads" --zarr-dir "$DATA_DIR/zarrs")
+}
+
+# One round: update the vendor stores (status logged, not used), then the
+# prediction job, whose status is the round's.
+update_and_predict() {
+    update_sharadar; log "sharadar update: exit $?"
+    predict_day
 }
 
 predict_day() {
@@ -89,9 +101,8 @@ morning() {
     exec 9> "$LIVE_DIR/.morning.lock"
     flock -n 9 || { log "morning: already running"; return 0; }
     log "morning: begin"
-    retry_until_cutoff "sharadar update" update_sharadar || return 1
     # predict_day.py: 0 appended, 3 already predicted, 2 data missing (retry).
-    OK_CODES="0 3" retry_until_cutoff "prediction job" predict_day || return 1
+    OK_CODES="0 3" retry_until_cutoff "update and prediction job" update_and_predict || return 1
     while [[ "$(now_hm)" < "$DECIDE_AT" ]]; do sleep 60; done
     log "decide: start"
     live decide; local status=$?
