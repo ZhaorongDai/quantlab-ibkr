@@ -15,6 +15,10 @@ What is locked here (ADR 0007, ADR 0008):
   narrowing the window does not move them;
 - ``decisions.zarr`` records the current weights handed to the rule;
 - a rule's failure is a hold, recorded with its message;
+- a rule declaring factors (mean-variance bounding a factor's outputs) or a
+  factor risk model (mean-variance on a USE4 risk model's stores, its style
+  exposures bounded, the exposures read or computed) is replayed, its
+  factors and forecast taken from quantlab's ``DecisionInputs`` (ADR 0011);
 - runs trader cannot replay closed-loop are refused.
 """
 
@@ -26,7 +30,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
-from quantlab.portfolio.base import InputDeclaration
+from quantlab.factor.config import BaseFactorConfig
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
@@ -35,7 +39,12 @@ from quantlab.portfolio.predefined.top_n import TopNConstructor
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.runner import run
 from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
-from tests.quantlab_run_fixture import build_constructor_run, build_quantlab_run
+from tests.factor_risk_fixture import FixtureExposures, risk_model_variables
+from tests.quantlab_run_fixture import (
+    build_constructor_run,
+    build_factor_risk_run,
+    build_quantlab_run,
+)
 
 PERMNOS = (10001, 10002, 10003, 10004)
 LABELS = [LabelSpec("ret_5", "raw", 1, 5)]
@@ -43,20 +52,20 @@ LABELS = [LabelSpec("ret_5", "raw", 1, 5)]
 SAME_EXECUTION = BacktestVenueConfig(ExecutionConfig(fee_model="fraction"))
 
 
-def _market(n_bars: int, seed: int):
+def _market(n_bars: int, seed: int, permnos=PERMNOS):
     """Raw opens and closes per PERMNO: random walks, opens gapping from the previous close."""
     rng = np.random.default_rng(seed)
     close, open_ = {}, {}
-    for k, permno in enumerate(PERMNOS):
+    for k, permno in enumerate(permnos):
         path = (20.0 + 10 * k) * np.exp(np.cumsum(rng.normal(0, 0.02, n_bars)))
         close[permno] = list(np.round(path, 2))
         open_[permno] = list(np.round(path * (1 + rng.normal(0, 0.005, n_bars)), 2))
     return open_, close
 
 
-def _predictions(n_bars: int, seed: int):
+def _predictions(n_bars: int, seed: int, permnos=PERMNOS):
     rng = np.random.default_rng(seed)
-    return {"ret_5": {p: list(rng.normal(0, 0.01, n_bars)) for p in PERMNOS}}
+    return {"ret_5": {p: list(rng.normal(0, 0.01, n_bars)) for p in permnos}}
 
 
 def _topn():
@@ -264,20 +273,6 @@ def test_a_run_without_a_prediction_panel_is_refused(tmp_path):
     assert not (tmp_path / "trader").exists()
 
 
-class FactorTopN(TopNConstructor):
-    """A rule declaring factors trader cannot compute."""
-
-    def declared_inputs(self):
-        return InputDeclaration(factors=("a factor",))
-
-
-class RiskModelTopN(TopNConstructor):
-    """A rule declaring a factor risk model trader cannot read."""
-
-    def declared_inputs(self):
-        return InputDeclaration(risk_model="a factor risk model")
-
-
 def _edit_config(run_dir: Path, edit) -> None:
     config = json.loads((run_dir / "config.json").read_text())
     edit(config)
@@ -291,16 +286,78 @@ def _edit_record(run_dir: Path, edit) -> None:
     (run_dir / "run.json").write_text(json.dumps(record))
 
 
-@pytest.mark.parametrize("rule", ["FactorTopN", "RiskModelTopN"])
-def test_a_rule_declaring_factors_or_a_risk_model_is_refused(tmp_path, rule):
-    quantlab_run, _, _ = _build(tmp_path, "topn")
-    _edit_config(
-        quantlab_run,
-        lambda c: c["constructor"].update(name=f"{__name__}.{rule}"),
-    )
+#: Ten symbols, two industries of five, for the factor risk model's regression.
+RISK_PERMNOS = tuple(range(10001, 10011))
+#: Store bars, first window bar (the risk model's volatility regime
+#: adjustment is warm only after some 18 regression bars) and the bounds held
+#: on the book's style exposures.
+RISK_BARS, RISK_FIRST_BAR = 36, 20
+STYLE_BOUNDS = {"style_a": (-0.1, 0.1), "style_b": (-0.2, 0.2)}
 
-    with pytest.raises(ValueError, match=r"declared_inputs\(\)"):
-        _replay(quantlab_run, tmp_path, "closed")
+
+def _declares_a_risk_model(root, **fields):
+    """Mean-variance on a factor risk model, its style exposures bounded (ADR 0011)."""
+    bars = pd.bdate_range("2024-01-02", periods=RISK_BARS)
+    open_, close = _market(RISK_BARS, seed=1, permnos=RISK_PERMNOS)
+    return build_factor_risk_run(
+        root, bars, open_, close,
+        _predictions(RISK_BARS - RISK_FIRST_BAR, seed=2, permnos=RISK_PERMNOS), LABELS,
+        first_bar=RISK_FIRST_BAR, exposure_bounds=STYLE_BOUNDS, rebalance_periods=2,
+        **fields,
+    ), bars[RISK_FIRST_BAR:]
+
+
+def _declares_factors(root):
+    """Mean-variance on Ledoit-Wolf, bounding the outputs of a declared factor."""
+    bars = pd.bdate_range("2024-01-02", periods=RISK_BARS)
+    open_, close = _market(RISK_BARS, seed=1, permnos=RISK_PERMNOS)
+
+    def rule(dataset):
+        return MeanVarianceOptimizer(
+            MeanVarianceConfig(
+                expected_return_label="ret_5",
+                covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
+                risk_aversion=5.0,
+                ic=0.05,
+                exposure_factors=(
+                    FixtureExposures(BaseFactorConfig(warmup_bars=0, dataset=dataset)),
+                ),
+                exposure_bounds=STYLE_BOUNDS,
+            )
+        )
+
+    return build_constructor_run(
+        root, bars, open_, close,
+        _predictions(RISK_BARS - RISK_FIRST_BAR, seed=2, permnos=RISK_PERMNOS), rule, LABELS,
+        first_bar=RISK_FIRST_BAR, rebalance_periods=2,
+        variables=risk_model_variables(RISK_PERMNOS, RISK_BARS, seed=7),
+    ), bars[RISK_FIRST_BAR:]
+
+
+#: Runs whose rule declares factors or a factor risk model (its exposures
+#: read from their store, or computed), each closed-loop replayed.
+DECLARING = {
+    "factors": _declares_factors,
+    "risk_model": _declares_a_risk_model,
+    "risk_model_cal": lambda root: _declares_a_risk_model(root, exposure_data_strategy="cal"),
+}
+
+
+@pytest.mark.parametrize("rule", sorted(DECLARING))
+def test_a_rule_declaring_factors_or_a_risk_model_is_replayed_closed_loop(tmp_path, rule):
+    # Turnover penalty and min_trade 0, no lock: every rebalance bar is
+    # holding-independent, so each decision equals the run's row bit for bit.
+    (quantlab_run, failed), window = DECLARING[rule](tmp_path / "quantlab")
+
+    run_dir = _replay(quantlab_run, tmp_path, "closed")
+
+    decided, expected, _ = _decided_and_table(
+        {"closed": run_dir, "quantlab_run": quantlab_run}
+    )
+    assert list(decided["timestamp"].values) == list(window[:-1:2].values)
+    assert failed == []
+    assert np.isfinite(decided.values).all()
+    assert np.array_equal(decided.values, expected.values)
 
 
 def test_a_run_valued_at_raw_prices_is_refused_closed_loop(tmp_path):

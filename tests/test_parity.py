@@ -12,7 +12,9 @@ per bar). What is locked here, on synthetic model-free quantlab runs:
 - the rung identities: L2 = L1 when no buy is cash-capped, L3 = L2 without
   corporate actions, L4 = L3 with integral sizes, L5 = L4 up to rounding
   under the fraction fee model;
-- closed-loop weights equal ``weights.zarr`` on holding-independent bars;
+- closed-loop weights equal ``weights.zarr`` on holding-independent bars,
+  for a rule declaring a factor risk model too (ADR 0011); only a run
+  valued at raw prices is left without its closed-versus-open block;
 - the Decision recheck: quantlab's rule, run again on every closed-loop
   decision's context (the recorded current weights included), gives the
   decided weights bit for bit, a hold included, and names a bar that does not.
@@ -54,7 +56,12 @@ from quantlab_ibkr.parity.decision_recheck import decision_recheck
 from quantlab_ibkr.parity.ladder import parity
 from quantlab_ibkr.quantlab_run import QuantlabRun
 from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
-from tests.quantlab_run_fixture import ADJUSTED_SCALE, build_constructor_run, build_quantlab_run
+from tests.quantlab_run_fixture import (
+    ADJUSTED_SCALE,
+    build_constructor_run,
+    build_factor_risk_run,
+    build_quantlab_run,
+)
 
 NAN = np.nan
 BARS = pd.bdate_range("2024-01-02", periods=10)
@@ -596,8 +603,8 @@ def test_a_run_without_a_prediction_panel_has_no_closed_loop_block(full):
 
 
 def test_a_run_trader_cannot_replay_closed_loop_still_gets_its_ladder(tmp_path):
-    # A rule declaring factors (declared_inputs(); a factor risk model's
-    # exposures, #38): the ladder runs to T, the closed-loop block is left out and says why.
+    # A run valued at raw prices (a closed loop decides on adjusted closes,
+    # ADR 0002): the ladder runs to T, the closed-loop block is left out and says why.
     bars = pd.bdate_range("2024-01-02", periods=12)
     open_, close = _random_market(12)
     rng = np.random.default_rng(2)
@@ -607,17 +614,49 @@ def test_a_run_trader_cannot_replay_closed_loop_still_gets_its_ladder(tmp_path):
         TopNConstructor(TopNConfig(direction="long_only", top_n=2)), LABELS,
         first_bar=0, rebalance_periods=2, init_cash=100_000.0,
     )
-    config = json.loads((run_dir / "config.json").read_text())
-    config["constructor"]["name"] = "tests.test_closed_loop_replay.FactorTopN"
-    (run_dir / "config.json").write_text(json.dumps(config))
+    record = json.loads((run_dir / "run.json").read_text())
+    record["market"]["valuation_price_column"] = "close"
+    (run_dir / "run.json").write_text(json.dumps(record))
 
     report, _ = _report(parity(run_dir, output_dir=tmp_path / "parity"))
 
     assert report["closed_vs_open"] is None
     assert report["inputs"]["closed_loop_run"] is None
-    assert "declared_inputs()" in report["inputs"]["closed_loop_refused"]
+    assert "adjusted" in report["inputs"]["closed_loop_refused"]
     assert "closed_weights_equal_on_holding_independent_bars" not in report["checks"]
     assert report["checks"]["T_equals_L5"]["passed"]
+
+
+def test_a_run_whose_rule_declares_a_factor_risk_model_gets_its_closed_loop_block(tmp_path):
+    # Mean-variance on a factor risk model, its style exposures bounded (ADR
+    # 0011); turnover penalty and min_trade 0, so every rebalance bar is
+    # holding-independent.
+    n_bars, first_bar = 36, 20  # the risk model's volatility regime adjustment warms up
+    permnos = tuple(range(10001, 10011))
+    bars = pd.bdate_range("2024-01-02", periods=n_bars)
+    rng = np.random.default_rng(1)
+    close = {
+        p: list(np.round((20.0 + 3 * k) * np.exp(np.cumsum(rng.normal(0, 0.02, n_bars))), 2))
+        for k, p in enumerate(permnos)
+    }
+    open_ = {p: list(np.round(np.array(c) * (1 + rng.normal(0, 0.005, n_bars)), 2)) for p, c in close.items()}
+    run_dir, failed = build_factor_risk_run(
+        tmp_path / "quantlab", bars, open_, close,
+        {"ret_5": {p: list(rng.normal(0, 0.01, n_bars - first_bar)) for p in permnos}}, LABELS,
+        first_bar=first_bar, exposure_bounds={"style_a": (-0.1, 0.1)},
+        rebalance_periods=2, init_cash=100_000.0,
+    )
+
+    report, data = _report(parity(run_dir, output_dir=tmp_path / "parity"))
+
+    assert failed == []
+    assert report["inputs"]["closed_loop_refused"] is None
+    assert report["inputs"]["closed_loop_run"] is not None
+    block = report["closed_vs_open"]
+    assert block["holding_independent_rule"]
+    assert block["rebalance_bars_compared"] == block["holding_independent_bars"] > 0
+    assert report["checks"]["closed_weights_equal_on_holding_independent_bars"]["passed"]
+    assert "closed_equity" in data
 
 
 def test_the_cli_writes_a_parity_report(tmp_path, capsys, full):
