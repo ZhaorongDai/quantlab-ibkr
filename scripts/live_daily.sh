@@ -23,8 +23,9 @@
 # Environment (files readable by the owner only):
 #   ~/.config/quantlab/sharadar.env  SHARADAR_API_KEY (read by update.py only)
 #   ~/.config/quantlab/ibkr.env      TWS_ACCOUNT (the paper account, DU...)
-# Overrides: LIVE_DIR, QUANTLAB_DIR, IBKR_DIR, DATA_DIR, CPUS, and the
-# times below. `live_daily.sh morning|record` runs one step now.
+# Overrides: LIVE_DIR, QUANTLAB_DIR, IBKR_DIR, DATA_DIR, CPUS, the times
+# below, and DECIDE_FLAGS (e.g. "--dry-run": decide and print, submit nothing).
+# `live_daily.sh morning|record` runs one step now.
 set -u
 
 DATA_DIR=${DATA_DIR:-/data/quantlab}
@@ -93,8 +94,9 @@ predict_day() {
 }
 
 live() {
+    local step=$1; shift
     (load_env "$HOME/.config/quantlab/ibkr.env"
-     cd "$IBKR_DIR" && QUANTLAB_DATA_DIR=$DATA_DIR run .venv/bin/quantlab-ibkr live "$1" "$CONFIG")
+     cd "$IBKR_DIR" && QUANTLAB_DATA_DIR=$DATA_DIR run .venv/bin/quantlab-ibkr live "$step" "$CONFIG" "$@")
 }
 
 morning() {
@@ -104,8 +106,9 @@ morning() {
     # predict_day.py: 0 appended, 3 already predicted, 2 data missing (retry).
     OK_CODES="0 3" retry_until_cutoff "update and prediction job" update_and_predict || return 1
     while [[ "$(now_hm)" < "$DECIDE_AT" ]]; do sleep 60; done
-    log "decide: start"
-    live decide; local status=$?
+    log "decide: start ${DECIDE_FLAGS:-}"
+    # shellcheck disable=SC2086
+    live decide ${DECIDE_FLAGS:-}; local status=$?
     log "decide: exit $status"
     return "$status"
 }
