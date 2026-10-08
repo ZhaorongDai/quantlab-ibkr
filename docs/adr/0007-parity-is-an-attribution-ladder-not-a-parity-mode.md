@@ -49,8 +49,8 @@ reported, because the gaps do not commute.
   ledger against vectorbt; on fixtures without corporate actions L3 equals L2, with integral
   target sizes L4 equals L3, with the fraction fee model L5 differs from L4 by rounding only.
 - **Closed versus open loop**: on every rebalance bar where the decision does not depend on
-  holdings (no locked position in either book, no hold; TopN, or mean-variance without turnover
-  penalty), the closed loop's decided weights equal the run's `weights.zarr` row bit for bit, and
+  holdings (no locked position in either book, no hold; TopN, or mean-variance with neither a
+  turnover penalty nor a `min_trade`), the closed loop's decided weights equal the run's `weights.zarr` row bit for bit, and
   in a fixture where that holds on every bar, the closed-loop and open-loop trader runs have
   identical orders and equity.
 

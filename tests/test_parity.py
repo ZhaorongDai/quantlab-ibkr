@@ -401,7 +401,7 @@ def _constructor_run(root, rule, n_bars, first_bar, *, predictions=None, halt=No
     return run_dir, _report(parity(run_dir, output_dir=root / "parity"))
 
 
-def _mean_variance():
+def _mean_variance(min_trade=0.0):
     return MeanVarianceOptimizer(
         MeanVarianceConfig(
             expected_return_label="ret_5",
@@ -409,6 +409,7 @@ def _mean_variance():
             risk_aversion=5.0,
             ic=0.05,
             weight_cap=0.6,
+            min_trade=min_trade,
         )
     )
 
@@ -436,6 +437,18 @@ def test_closed_loop_weights_equal_the_rebalance_table_on_holding_independent_ba
     assert block["orders_equal"]
     assert block["max_equity_difference"] == 0.0
     np.testing.assert_array_equal(data["closed_equity"].values, _equity(data, "T"))
+
+
+def test_a_mean_variance_rule_with_a_min_trade_is_not_holding_independent(tmp_path):
+    # No turnover penalty, but a solved change below min_trade is not traded:
+    # the decision depends on holdings, so no bar is compared bit for bit.
+    _, (report, _) = _constructor_run(tmp_path, _mean_variance(min_trade=0.01), 18, 6)
+    block = report["closed_vs_open"]
+
+    assert not block["holding_independent_rule"]
+    assert block["rebalance_bars_compared"] > 0
+    assert block["holding_independent_bars"] == 0
+    assert block["holding_independent_bars_equal"] == 0
 
 
 def test_a_locked_position_takes_its_bar_out_of_the_closed_loop_comparison(tmp_path):

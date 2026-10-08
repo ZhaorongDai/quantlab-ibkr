@@ -17,14 +17,15 @@ from quantlab_ibkr.quantlab_run import QuantlabRun
 
 
 #: Rules whose decision does not depend on holdings when nothing is locked
-#: and nothing holds (ADR 0007): TopN, and mean-variance without a turnover
-#: penalty; by class path, with the test on the rebuilt rule.
+#: and nothing holds (ADR 0007): TopN, and mean-variance with neither a
+#: turnover penalty nor a ``min_trade`` (a solved change below it is not
+#: traded, so the decision keeps current weights); by class path, with the
+#: test on the rebuilt rule.
 _HOLDING_INDEPENDENT_RULES = {
     "quantlab.portfolio.predefined.top_n.TopNConstructor": lambda rule: True,
-    "quantlab.portfolio.predefined.mean_variance.MeanVarianceOptimizer": lambda rule: float(
-        rule.config.turnover_penalty
-    )
-    == 0.0,
+    "quantlab.portfolio.predefined.mean_variance.MeanVarianceOptimizer": lambda rule: (
+        float(rule.config.turnover_penalty) == 0.0 and float(rule.config.min_trade) == 0.0
+    ),
 }
 
 
