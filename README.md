@@ -16,7 +16,8 @@ on the holdings the account has), or `--loop open` to execute the run's rebalanc
 writes the run's parity report (`parity.json` + `parity.zarr`, ADR 0007): the ladder from
 quantlab's vectorbt run to trader's open loop one convention at a time, its end checks (the
 command exits with 2 when one fails) and, for a run with a prediction panel, closed versus open
-loop.
+loop with its Decision recheck (quantlab's rule run again on each closed-loop decision's context,
+actual holdings included, which must give the decided weights bit for bit).
 
 The design is in `docs/adr/`; the v1 spec is issue #18.
 

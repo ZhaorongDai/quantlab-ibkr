@@ -248,10 +248,60 @@ class ConstructorTargets(TargetSource):
             return None
         if inputs.predictions is None:
             raise ValueError(f"ConstructorTargets at {t.date()}: the bar has no prediction row")
-        held = current_weights[current_weights != 0.0]
+        return self.decide(t, inputs.predictions, current_weights)
+
+    def decide(
+        self, t: pd.Timestamp, predictions: xr.Dataset, current_weights: pd.Series
+    ) -> Decision:
+        """Run the rule on the context of ``t`` built from a prediction row and holdings.
+
+        The one context the closed loop decides from, and the one the
+        parity report's **Decision recheck** rebuilds from a run's recorded
+        current weights. The holdings are handed to quantlab in PERMNO
+        order, so a held security without a prediction takes the same place
+        in the context whatever order the account listed it in.
+
+        Parameters
+        ----------
+        t : pandas.Timestamp
+            The decision date, a rebalance bar.
+        predictions : xarray.Dataset
+            The bar's prediction row, one variable per label on ``symbol``.
+        current_weights : pandas.Series
+            Each holding's weight at t's raw close, per PERMNO; a zero or
+            NaN entry is not held.
+
+        Returns
+        -------
+        quantlab.portfolio.base.Decision
+            The rule's decision on the context's symbols.
+
+        Examples
+        --------
+        quantlab's top-1 rule on a book holding BBB:
+
+        >>> from quantlab.portfolio.config import TopNConfig
+        >>> from quantlab.dataset.memory import FrameDataset
+        >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
+        >>> bars = pd.bdate_range("2024-01-02", periods=2)
+        >>> price = xr.DataArray(
+        ...     [[30.0, 40.0]] * 2, dims=("timestamp", "symbol"),
+        ...     coords={"timestamp": bars, "symbol": ["AAA", "BBB"]},
+        ... )
+        >>> source = ConstructorTargets(DecisionInputs(
+        ...     FrameDataset(xr.Dataset({"adjOpen": price, "adjClose": price})),
+        ...     TopNConstructor(TopNConfig(direction="long_only", top_n=1)),
+        ...     fill_column="adjOpen", valuation_column="adjClose",
+        ...     rebalance_periods=1, anchor=bars[0],
+        ... ))
+        >>> row = xr.Dataset({"ret": ("symbol", [0.3, 0.1])}, coords={"symbol": ["AAA", "BBB"]})
+        >>> source.decide(bars[0], row, pd.Series({"BBB": 1.0})).weights.values.tolist()
+        [1.0, 0.0]
+        """
+        held = current_weights[current_weights.notna() & (current_weights != 0.0)].sort_index()
         context = self.decision_inputs.context(
             t,
-            inputs.predictions,
+            predictions,
             xr.DataArray(held.to_numpy(dtype=float), dims="symbol", coords={"symbol": held.index}),
         )
         return self.decision_inputs.constructor.decide(context)
