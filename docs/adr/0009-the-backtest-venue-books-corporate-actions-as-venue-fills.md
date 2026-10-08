@@ -1,5 +1,5 @@
 ---
-status: accepted
+status: accepted, amended 2026-10-08 (Sharadar prices)
 date: 2026-10-01
 ---
 
@@ -157,3 +157,13 @@ holding is valued at the raw prices, so the loss is realised. Splits by `splitFa
 (L3) applies the same rule independently. The run's equity can now differ from quantlab's on such
 days, since quantlab values the holding at `adjClose`; that gap is the quantlab-side data question
 and is attributed by the parity ladder, not hidden by the venue.
+
+## Amendment (2026-10-08, Sharadar prices, #44)
+
+A Sharadar price dataset (quantlab `SharadarStockDataset`) carries `cumfacshr` too, derived by
+quantlab from its own `splitFactor`: 1.0 on each permaticker's first stored bar and divided by
+`splitFactor` since, so `cumfacshr[t-1] / cumfacshr[t] == splitFactor[t]` on every bar. Sharadar's
+`splitFactor` is the split ratio a holder receives, and the value of a spin-off arrives in
+`divCash` (ACTIONS `spinoffdividend`), so on Sharadar data every factor day is a holder split and
+the venue never sees a value-distribution day. A split on a permaticker's first stored bar is not
+in the chain; nobody can hold the security before that bar.
