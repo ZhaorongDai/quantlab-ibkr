@@ -85,6 +85,8 @@ exit with 2 when the Decision recheck differs.
 - Only a paper account (`DU...`) is traded unless the config sets `allow_live`. The check
   runs before any connection.
 - `--dry-run` decides and prints the orders. It submits nothing and records nothing.
+  Add `--force-decide` to decide t even when it is not a rebalance bar, which exercises the
+  rule, the contract lookup and the orders on any day; it is refused without `--dry-run`.
 
 **Deadline.** Orders must reach IBKR before the opening auction's cut-off (about 09:28 ET).
 A day that decides refuses to start after `order_deadline` (default 09:20 New York time),

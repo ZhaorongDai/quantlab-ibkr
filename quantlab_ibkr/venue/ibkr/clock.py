@@ -73,6 +73,9 @@ class LiveDecisionClock(DecisionClock):
         (``QuantlabRun.decision_inputs().rebalances``).
     hold_reason : str or None, optional
         Why the source cannot decide t (``LiveDecisionSource.hold_reason``).
+    force : bool, default False
+        Treat t as a rebalance bar whatever the cadence says (a dry run's
+        ``force_decide``); a ``hold_reason`` still holds.
     on_schedule : Callable, optional
         Called with the strategy when it starts, before the decision fires
         (the venue reads the reconciled account there).
@@ -96,6 +99,8 @@ class LiveDecisionClock(DecisionClock):
     "2026-10-07 is not a rebalance bar of the run's cadence"
     >>> LiveDecisionClock(t, lambda bar: True, "no prediction row").decision.hold_reason
     'no prediction row'
+    >>> LiveDecisionClock(t, lambda bar: False, force=True).decision.decides
+    True
     """
 
     def __init__(
@@ -104,10 +109,11 @@ class LiveDecisionClock(DecisionClock):
         rebalances: Callable[[pd.Timestamp], bool],
         hold_reason: str | None = None,
         *,
+        force: bool = False,
         on_schedule: Callable[[PortfolioStrategy], None] | None = None,
     ):
         t = pd.Timestamp(t)
-        rebalance = bool(rebalances(t))
+        rebalance = force or bool(rebalances(t))
         if not rebalance:
             reason = NOT_A_REBALANCE_BAR.format(t=t.date())
         else:

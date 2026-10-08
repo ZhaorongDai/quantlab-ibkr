@@ -461,9 +461,9 @@ def test_the_command_line_builds_the_live_config_from_a_file_and_flags(tmp_path)
     path.write_text(json.dumps(config.get_config()))
     parser = cli._parser()
     built = cli._live_config(parser, parser.parse_args(
-        ["live", "decide", str(path), "--dry-run", "--port", "4004"]
+        ["live", "decide", str(path), "--dry-run", "--force-decide", "--port", "4004"]
     ))
-    assert built.venue.dry_run and built.venue.port == 4004
+    assert built.venue.dry_run and built.venue.force_decide and built.venue.port == 4004
     assert built.venue.prediction_store == "p.zarr" and built.quantlab_run == "runs/real"
     flags = cli._live_config(parser, parser.parse_args([
         "live", "record", "--quantlab-run", "runs/real", "--prediction-store", "p.zarr",

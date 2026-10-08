@@ -229,3 +229,11 @@ def test_a_store_of_another_run_is_refused(tmp_path, run_dir):
     store = _store(tmp_path, other, [(pd.Timestamp("2024-01-17"), [0.1] * 4)])
     with pytest.raises(ValueError, match="holds the live predictions of"):
         LiveDecisionSource(QuantlabRun.load(run_dir), store)
+
+
+def test_a_forced_clock_decides_a_bar_off_the_cadence_but_still_holds_without_a_row():
+    t = pd.Timestamp("2026-10-07")
+    forced = LiveDecisionClock(t, lambda bar: False, force=True).decision
+    assert forced.decides and forced.rebalances
+    held = LiveDecisionClock(t, lambda bar: False, "no prediction row", force=True).decision
+    assert not held.decides and held.hold_reason == "no prediction row"

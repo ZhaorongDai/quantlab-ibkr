@@ -136,6 +136,10 @@ class IbkrVenueConfig(VenueConfig):
         refuses to start after it, and no order is submitted after it.
     dry_run : bool, default False
         Decide and report the orders, submit none.
+    force_decide : bool, default False
+        Decide t even when it is not a rebalance bar of the run's cadence, to
+        exercise the decision, the contract lookup and the orders on any day;
+        only with ``dry_run``.
     contract_client_id : int or None
         The API client id of the contract lookup made before the node
         starts; ``None`` is ``client_id + 1``.
@@ -151,8 +155,8 @@ class IbkrVenueConfig(VenueConfig):
     Raises
     ------
     ValueError
-        For a deadline that is not ``HH:MM``, or a pace or timeout that is not
-        positive.
+        For a deadline that is not ``HH:MM``, a pace or timeout that is not
+        positive, or ``force_decide`` without ``dry_run``.
 
     Examples
     --------
@@ -172,6 +176,7 @@ class IbkrVenueConfig(VenueConfig):
     allow_live: bool = False
     order_deadline: str = ORDER_DEADLINE
     dry_run: bool = False
+    force_decide: bool = False
     contract_client_id: int | None = None
     reports_client_id: int | None = None
     max_orders_per_second: int = MAX_ORDERS_PER_SECOND
@@ -179,6 +184,10 @@ class IbkrVenueConfig(VenueConfig):
 
     def __post_init__(self):
         parse_deadline(self.order_deadline)
+        if self.force_decide and not self.dry_run:
+            raise ValueError(
+                "IbkrVenueConfig.force_decide needs dry_run: a forced decision is never submitted"
+            )
         if self.max_orders_per_second < 1:
             raise ValueError(
                 f"IbkrVenueConfig.max_orders_per_second must be at least 1, "
@@ -387,6 +396,7 @@ class IbkrVenue(Venue):
             self.source.t,
             self.decision_inputs.rebalances,
             self.source.hold_reason,
+            force=config.force_decide,
             on_schedule=self._on_start,
         )
         self.decision = self.clock.decision

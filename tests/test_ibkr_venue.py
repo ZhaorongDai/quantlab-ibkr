@@ -272,6 +272,13 @@ def test_a_deciding_day_refuses_to_start_after_its_deadline(live_run):
     assert _build(live_run, late, dry_run=True).decision.decides  # a dry run may run late
 
 
+def test_force_decide_needs_a_dry_run():
+    with pytest.raises(ValueError, match="force_decide needs dry_run"):
+        IbkrVenueConfig(force_decide=True)
+    config = IbkrVenueConfig(dry_run=True, force_decide=True)
+    assert VenueConfig.from_config(config.get_config()) == config
+
+
 def test_building_refuses_a_live_account(live_run):
     t = live_run[2]
     with pytest.raises(ValueError, match="not an IBKR paper account"):

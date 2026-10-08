@@ -78,6 +78,10 @@ def _parser() -> argparse.ArgumentParser:
         command.add_argument("--account-id", default=None, help="default: $TWS_ACCOUNT")
         command.add_argument("--order-deadline", default=None, help="HH:MM New York")
         command.add_argument("--dry-run", action="store_true", default=None)
+        command.add_argument(
+            "--force-decide", action="store_true", default=None,
+            help="with --dry-run: decide t even off the rebalance cadence",
+        )
     return parser
 
 
@@ -172,6 +176,7 @@ _VENUE_FLAGS = {
     "account_id": "account_id",
     "order_deadline": "order_deadline",
     "dry_run": "dry_run",
+    "force_decide": "force_decide",
 }
 
 
