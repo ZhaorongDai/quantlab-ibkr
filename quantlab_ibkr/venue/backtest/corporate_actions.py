@@ -348,7 +348,9 @@ def corporate_action_days(prices: xr.Dataset) -> tuple[CorporateActionDay, ...]:
     pre_close = close.ffill().shift(1)
     dividend = dividend.where(np.isfinite(dividend), 0.0)
     # The anchor of bar t: the last bar before it with a raw close and an adjClose.
-    priced = (close.notna() & adj_close.notna()).to_numpy()
+    # dtype=bool: pandas gives a frame without columns (a window holding no
+    # security) a float64 array, which the masks below cannot combine with.
+    priced = (close.notna() & adj_close.notna()).to_numpy(dtype=bool)
     anchor_close = close.where(priced).ffill().shift(1).to_numpy()
     anchor_return = (adj_close / adj_close.where(priced).ffill().shift(1)).to_numpy()
     closes, cash = close.to_numpy(), dividend.to_numpy()

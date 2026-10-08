@@ -285,7 +285,9 @@ class BacktestVenue(Venue):
             )
             for instrument in self.resolver.instruments():
                 engine.add_instrument(instrument)
-            engine.add_data(build_feed(self.source.prices, self.resolver))
+            feed = build_feed(self.source.prices, self.resolver)
+            if feed:  # empty when the window trades no security (#45)
+                engine.add_data(feed)
             engine.add_strategy(strategy)
             calendar = self.source.calendar()
             engine.run(

@@ -281,3 +281,20 @@ def test_a_fill_of_a_quantity_whose_double_is_inexact_is_recorded_whole(tmp_path
     assert orders["quantity"].tolist() == [59353]
     assert orders["filled_quantity"].tolist() == [59353]
     assert orders["status"].tolist() == ["filled"]
+
+
+def test_a_run_that_never_trades_replays_flat_at_the_initial_cash(tmp_path):
+    # Every rebalance bar a hold: the open loop asks for no security at all (#45).
+    never = {p: [NAN, NAN, 0.0, NAN, NAN, NAN] for p in OPEN}
+    quantlab_run = build_quantlab_run(tmp_path / "quantlab", BARS, OPEN, CLOSE, never)
+    config = TraderConfig(
+        quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
+        output_dir=str(tmp_path / "trader"),
+    )
+
+    run_dir = run(config)
+
+    assert _orders(run_dir).empty
+    equity = xr.open_zarr(run_dir / "equity.zarr").load()
+    assert list(equity["timestamp"].values) == list(BARS.values)
+    np.testing.assert_array_equal(equity["value"].values, [10_000.0] * len(BARS))

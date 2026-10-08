@@ -60,6 +60,7 @@ import xarray as xr
 
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.runner import run
+from quantlab_ibkr.venue.backtest.corporate_actions import corporate_action_days
 from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
 from tests.quantlab_run_fixture import ADJUSTED_SCALE, build_quantlab_run
 
@@ -364,3 +365,15 @@ def test_round_trip_statistics_equal_the_hand_count(replay):
     assert whole["Avg Losing Trade Duration"] is None
     assert whole["Profit Factor"] is None  # no losing trip: infinite
     assert whole["Expectancy"] == pytest.approx(sum(closed_pnl) / 3, rel=1e-9)
+
+
+def test_a_panel_without_symbols_has_no_corporate_action_days():
+    # The open loop of a run that never trades asks for no security (#45).
+    empty = np.empty((3, 0))
+    panel = xr.Dataset(
+        {name: (("timestamp", "symbol"), empty)
+         for name in ("close", "adjClose", "splitFactor", "cumfacshr", "divCash")},
+        coords={"timestamp": pd.bdate_range("2024-01-02", periods=3), "symbol": np.array([], dtype=int)},
+    )
+
+    assert corporate_action_days(panel) == ()

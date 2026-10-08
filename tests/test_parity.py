@@ -49,13 +49,10 @@ from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
 from quantlab.portfolio.predefined.mean_variance import MeanVarianceOptimizer
 from quantlab.portfolio.predefined.top_n import TopNConstructor
-from quantlab.tracking.base import NullTracker
-from quantlab_ibkr import runner
-from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.parity.decision_recheck import decision_recheck
 from quantlab_ibkr.parity.ladder import parity
 from quantlab_ibkr.quantlab_run import QuantlabRun
-from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
+from quantlab_ibkr.venue.backtest.venue import ExecutionConfig
 from tests.quantlab_run_fixture import (
     ADJUSTED_SCALE,
     build_constructor_run,
@@ -551,20 +548,24 @@ def test_a_tampered_decision_bar_fails_the_recheck_and_is_named(turnover, tmp_pa
 
 def test_a_hold_is_rechecked_as_a_failure_with_the_same_message(tmp_path):
     # Four symbols under a 0.2 cap cannot hold a fully invested book: every bar
-    # holds. The run never trades, so its closed loop is replayed on its own.
-    run_dir = _constructor_run(
-        tmp_path, _holding_dependent_mean_variance(weight_cap=0.2), 18, 6, with_parity=False
+    # holds. The run never trades, so its open loop asks for no security (#45).
+    run_dir, (report, data) = _constructor_run(
+        tmp_path, _holding_dependent_mean_variance(weight_cap=0.2), 18, 6
     )
-    closed = runner.run(
-        TraderConfig(
-            quantlab_run=str(run_dir), venue=BacktestVenueConfig(ExecutionConfig()),
-            loop="closed", output_dir=str(tmp_path / "trader"), tracker=NullTracker(),
-        )
-    )
-    recheck = decision_recheck(QuantlabRun.load(run_dir), closed)
-    assert recheck["bars_checked"] > 0 and recheck["bars_differing"] == 0
+    block = report["closed_vs_open"]
+    recheck = block["decision_recheck"]
 
+    assert recheck["bars_checked"] == block["rebalance_bars_compared"] > 0
+    assert recheck["bars_differing"] == 0
+    assert report["checks"]["decision_recheck"]["passed"]
+    assert block["orders_equal"] and block["max_equity_difference"] == 0.0
+    assert _orders(data, "T").empty
+    np.testing.assert_array_equal(_equity(data, "T"), 100_000.0)
+
+    closed = Path(report["inputs"]["closed_loop_run"])
     events = json.loads((closed / "events.json").read_text())
+    holds = [e for e in events["events"] if e["type"] == "hold"]
+    assert len(holds) == recheck["bars_checked"]  # every rebalance bar is a hold
     hold = next(e for e in events["events"] if e["type"] == "hold")
     message = hold["failure"]
     hold["failure"] = "another message"
