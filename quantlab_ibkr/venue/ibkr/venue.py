@@ -294,7 +294,8 @@ class LiveTargets(TargetSource):
     """The live day's targets: the rule's decision when the day decides, nothing otherwise.
 
     On a day the clock decides (``LiveDecision.decides``) the rule decides t
-    through ``ConstructorTargets``; on a hold (a bar off the cadence, no
+    through ``ConstructorTargets.decide``, the clock having applied the
+    cadence; on a hold (a bar off the cadence, no
     prediction row) the cycle only marks the account.
 
     Parameters
@@ -326,7 +327,11 @@ class LiveTargets(TargetSource):
         """
         if not self.decision.decides:
             return None
-        return self.constructor.targets(inputs, current_weights)
+        # The clock has already applied the cadence (and a dry run's
+        # force_decide); ConstructorTargets.targets would apply it again.
+        if inputs.predictions is None:
+            raise ValueError(f"LiveTargets at {inputs.timestamp.date()}: no prediction row")
+        return self.constructor.decide(inputs.timestamp, inputs.predictions, current_weights)
 
     def read_sources(self) -> list[tuple[object, str]]:
         """The rule's recorded reads (``ConstructorTargets.read_sources``)."""

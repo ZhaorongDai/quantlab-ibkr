@@ -29,6 +29,7 @@ from types import SimpleNamespace
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 from ibapi.tag_value import TagValue
 from nautilus_trader.adapters.interactive_brokers.common import IB, IBContract, IBContractDetails
 from nautilus_trader.adapters.interactive_brokers.parsing.execution import (
@@ -50,7 +51,7 @@ from nautilus_trader.test_kit.stubs.events import TestEventStubs
 from quantlab.dataset.base import SymbolName, TickerLookup
 from quantlab_ibkr.account import derived_cash, holdings
 from quantlab_ibkr.base.config import VenueConfig
-from quantlab_ibkr.base.venue import Loop, NextOpenOrder, ReplayRequest
+from quantlab_ibkr.base.venue import BarInputs, Loop, NextOpenOrder, ReplayRequest
 from quantlab_ibkr.decision import ConstructorTargets, DecisionCycle
 from quantlab_ibkr.quantlab_run import QuantlabRun
 from quantlab_ibkr.strategy import PortfolioStrategy
@@ -418,3 +419,25 @@ def test_the_strategy_decides_t_on_the_venue_and_submits_market_on_open(live_run
         (o.permno, o.quantity) for o in result.orders
     ]
     assert venue.done(strategy)
+
+
+def test_a_forced_decision_runs_the_rule_on_a_bar_off_the_cadence():
+    from quantlab_ibkr.venue.ibkr.clock import LiveDecision
+    from quantlab_ibkr.venue.ibkr.venue import LiveTargets
+
+    t = pd.Timestamp("2026-10-02")
+    calls = []
+
+    class Rule:
+        decision_inputs = SimpleNamespace(rebalances=lambda bar: False)
+
+        def decide(self, bar, predictions, current_weights):
+            calls.append(bar)
+            return "decided"
+
+    close = pd.Series({10001: 30.0})
+    inputs = BarInputs(timestamp=t, predictions=xr.Dataset(), close=close, delisted=close.isna())
+    forced = LiveTargets(Rule(), LiveDecision(t, True, None))
+    assert forced.targets(inputs, pd.Series(dtype=float)) == "decided" and calls == [t]
+    held = LiveTargets(Rule(), LiveDecision(t, False, "not a rebalance bar"))
+    assert held.targets(inputs, pd.Series(dtype=float)) is None and calls == [t]
