@@ -1,14 +1,18 @@
-"""The IBKR venue's decision clock: fire once, for the last closed bar, on a rebalance bar.
+"""The IBKR venue's decision clock: fire once, for the last closed bar.
 
 A live invocation decides at most one bar t (the live source's). The clock
 fires ``strategy.on_decision_time(t)`` once, as soon as the strategy starts
-(after the node has connected and reconciled the account), when t is a
-rebalance bar of the run's cadence and the source can decide it. The cadence
+(after the node has connected and reconciled the account), on every day, as
+the backtest's clock fires on every bar: the cycle marks the account at t's
+raw close, so the live run directory has a row of equity and holdings per
+bar (#51). It **decides** t only when t is a rebalance bar of the run's
+cadence and the source can decide it (``LiveDecision.decides``); on any
+other day the venue's targets (``IbkrVenue.targets``) decide nothing. The cadence
 is quantlab's: ``DecisionInputs.rebalances`` of the run's decision inputs with
 an open-ended schedule (``QuantlabRun.decision_inputs()``), counting every
 ``rebalance_periods`` bars of the price dataset's calendar from the run's
-anchor and on past the run's last bar (ADR 0008). Any other day holds, with
-its reason.
+anchor and on past the run's last bar (ADR 0008). A day that does not decide
+holds, with its reason.
 """
 
 from __future__ import annotations
@@ -58,7 +62,7 @@ class LiveDecision:
 
 
 class LiveDecisionClock(DecisionClock):
-    """Fire the strategy's decision once for t, when t rebalances and can be decided.
+    """Fire the strategy's decision cycle once for t; ``decision`` says whether it decides.
 
     Parameters
     ----------
@@ -78,7 +82,7 @@ class LiveDecisionClock(DecisionClock):
     decision : LiveDecision
         Whether t is decided, and why not.
     fired : bool
-        The decision of t has run.
+        The cycle of t has run.
     error : BaseException or None
         What the decision raised, kept for the venue to raise after stopping
         the node.
@@ -116,17 +120,17 @@ class LiveDecisionClock(DecisionClock):
 
     @property
     def done(self) -> bool:
-        """Whether the clock has nothing left to do: it held, or its decision ran.
+        """Whether the clock has nothing left to do: the cycle of t ran (or could not).
 
         Examples
         --------
         >>> LiveDecisionClock(pd.Timestamp("2026-10-07"), lambda bar: False).done
         False
         """
-        return self.scheduled and (not self.decision.decides or self.fired)
+        return self.scheduled and self.fired
 
     def schedule(self, strategy: PortfolioStrategy) -> None:
-        """Run ``on_schedule``, then fire ``strategy.on_decision_time(t)`` now if t is decided.
+        """Run ``on_schedule``, then fire ``strategy.on_decision_time(t)`` now.
 
         The decision is a time alert at the strategy clock's current time,
         which a live clock fires at once. An error ``on_schedule`` or the
@@ -162,8 +166,6 @@ class LiveDecisionClock(DecisionClock):
                 self.error = error
                 self.fired = True
                 return
-        if not self.decision.decides:
-            return
         t = self.decision.t
 
         def fire(_event) -> None:

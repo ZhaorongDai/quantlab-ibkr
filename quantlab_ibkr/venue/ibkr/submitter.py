@@ -14,13 +14,18 @@ the reason, as is every order of a dry run, which decides and reports
 without submitting. While the node runs, an order IBKR rejects, cancels or
 expires is reported through ``strategy.on_next_open_unfilled``; what happens
 at the open, after the node has stopped, is the record step's (#51).
+
+An order already **working** at IBKR for the same decision (an earlier run of
+the day that submitted it, then failed before recording it) is never sent
+again: the submitter adopts the working order (``working``, keyed by symbol
+and side) and records its id as the submitted one.
 """
 
 from __future__ import annotations
 
 import dataclasses
 import datetime
-from collections.abc import Hashable, Sequence
+from collections.abc import Hashable, Mapping, Sequence
 from typing import TYPE_CHECKING
 
 import pandas as pd
@@ -93,6 +98,10 @@ class IbkrOpenSubmitter(OpenSubmitter):
         Report every order unfilled (``DRY_RUN``) instead of submitting it.
     max_orders_per_second : int, default MAX_ORDERS_PER_SECOND
         Orders submitted per second at most.
+    working : Mapping, optional
+        ``(symbol, side) -> client order id`` of the orders already working
+        at IBKR for the decision date; a decided order matching one is
+        adopted instead of submitted.
 
     Attributes
     ----------
@@ -102,6 +111,8 @@ class IbkrOpenSubmitter(OpenSubmitter):
         The orders submitted to IBKR.
     unfilled : list of tuple
         ``(order, reason)`` of each order reported unfilled.
+    adopted : list of NextOpenOrder
+        The orders found working at IBKR and not submitted again.
     released : bool
         Every order handed over has been submitted or reported.
 
@@ -120,6 +131,7 @@ class IbkrOpenSubmitter(OpenSubmitter):
         order_deadline: str = ORDER_DEADLINE,
         dry_run: bool = False,
         max_orders_per_second: int = MAX_ORDERS_PER_SECOND,
+        working: Mapping[tuple[Hashable, str], str] | None = None,
     ):
         parse_deadline(order_deadline)
         if max_orders_per_second < 1:
@@ -133,6 +145,8 @@ class IbkrOpenSubmitter(OpenSubmitter):
         self.decided: list[NextOpenOrder] = []
         self.submitted: list[NextOpenOrder] = []
         self.unfilled: list[tuple[NextOpenOrder, str]] = []
+        self.adopted: list[NextOpenOrder] = []
+        self.working = dict(working or {})
         self.released = True
         self._strategy: PortfolioStrategy | None = None
         self._by_instrument: dict[Hashable, NextOpenOrder] = {}
@@ -164,6 +178,8 @@ class IbkrOpenSubmitter(OpenSubmitter):
         """
         queued = sorted(orders, key=lambda order: order.side != "SELL")
         self.decided.extend(queued)
+        if self.working and not self.dry_run:
+            queued = [order for order in queued if not self._adopt(order)]
         if not queued:
             return
         if self.dry_run:
@@ -204,6 +220,15 @@ class IbkrOpenSubmitter(OpenSubmitter):
             strategy.submit_next_open(order, TimeInForce.AT_THE_OPEN)
         if last:
             self.released = True
+
+    def _adopt(self, order: NextOpenOrder) -> bool:
+        """Record ``order`` as the working IBKR order of its symbol and side, if there is one."""
+        client_order_id = self.working.pop((order.permno, order.side), None)
+        if client_order_id is None:
+            return False
+        self.adopted.append(order)
+        self._strategy.recorder.order_submitted(order, client_order_id)
+        return True
 
     def _report(self, order: NextOpenOrder, reason: str) -> None:
         self.unfilled.append((order, reason))

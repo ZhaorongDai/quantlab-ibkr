@@ -10,8 +10,9 @@ run's price dataset, read up to t and no later, exactly as the backtest venue
 reads them (``BacktestDecisionSource`` over a window ending at t).
 
 A day without a prediction row for t, or a store holding a row for a bar the
-prices do not reach yet, is a **hold**: ``hold_reason`` says why, and the live
-clock never fires on it.
+prices do not reach yet, is a **hold**: ``hold_reason`` says why, and the
+day's inputs carry no predictions (the cycle only marks the account at t's
+close; the venue's targets decide nothing).
 """
 
 from __future__ import annotations
@@ -41,6 +42,18 @@ PREDICTIONS_AHEAD = (
 
 def _day(t: pd.Timestamp) -> str:
     return str(pd.Timestamp(t).date())
+
+
+def last_price_bar(run: QuantlabRun) -> pd.Timestamp:
+    """Return the last bar of ``run``'s price dataset: the last closed bar a live day decides.
+
+    Examples
+    --------
+    ::
+
+        t = last_price_bar(QuantlabRun.load(run_dir))
+    """
+    return pd.Timestamp(run.price_dataset.bar_after(run.window[0], np.iinfo(np.int64).max))
 
 
 class LiveDecisionSource(DecisionSource):
@@ -108,9 +121,7 @@ class LiveDecisionSource(DecisionSource):
                 f"{self.store.path} holds the live predictions of {owner}, not of {run.run_dir}"
             )
         dataset = run.price_dataset
-        self.last_price_bar = pd.Timestamp(
-            dataset.bar_after(run.window[0], np.iinfo(np.int64).max)
-        )
+        self.last_price_bar = last_price_bar(run)
         self.t = self.last_price_bar if t is None else pd.Timestamp(t)
         if self.t > self.last_price_bar:
             raise ValueError(
@@ -181,10 +192,13 @@ class LiveDecisionSource(DecisionSource):
         t : pandas.Timestamp
             The source's bar.
 
+        On a bar that holds (``hold_reason``) the inputs carry no
+        predictions: the cycle marks the account and decides nothing.
+
         Raises
         ------
         ValueError
-            For another bar, or a bar that holds (``hold_reason``).
+            For another bar.
 
         Examples
         --------
@@ -196,10 +210,8 @@ class LiveDecisionSource(DecisionSource):
         t = pd.Timestamp(t)
         if t != self.t:
             raise ValueError(f"the live source decides {_day(self.t)} only, not {_day(t)}")
-        if self.hold_reason is not None:
-            raise ValueError(f"{_day(t)} holds: {self.hold_reason}")
         predictions = self._row
-        if self.excluded:
+        if predictions is not None and self.excluded:
             mask = xr.DataArray(
                 ~np.isin(predictions["symbol"].values, list(self.excluded)),
                 dims="symbol",

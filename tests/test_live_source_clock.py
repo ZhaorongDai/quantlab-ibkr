@@ -10,7 +10,9 @@ every 3 bars) and a live prediction store of it (quantlab #233's
 - the source hands t's prediction row, raw close and delisting mark, reading
   nothing after t;
 - a missing prediction row, or a store row for a bar after the prices' last,
-  is a hold with a reason, never a decision;
+  is a hold with a reason, never a decision: the day's inputs carry no
+  predictions, and the clock still fires the cycle, which only marks the
+  account (#51: a row of equity and holdings per day);
 - excluded symbols lose their predictions; a store of another run is refused.
 """
 
@@ -137,8 +139,8 @@ def test_a_missing_prediction_row_is_a_hold_never_a_decision(tmp_path, run_dir):
     clock = LiveDecisionClock(source.t, run.decision_inputs().rebalances, source.hold_reason)
     assert clock.decision.rebalances and not clock.decision.decides
     assert clock.decision.hold_reason == source.hold_reason
-    with pytest.raises(ValueError, match="holds"):
-        source.inputs(rebalance_bar)
+    inputs = source.inputs(rebalance_bar)
+    assert inputs.predictions is None and list(inputs.close.index) == [10002]
 
 
 def test_a_prediction_row_after_the_prices_is_a_hold(tmp_path, run_dir):
@@ -164,7 +166,7 @@ def test_a_bar_off_the_cadence_holds_with_its_reason(tmp_path, run_dir):
     assert clock.decision.hold_reason == "2024-01-17 is not a rebalance bar of the run's cadence"
 
 
-def test_clock_fires_once_on_a_decided_bar_and_never_on_a_hold():
+def test_clock_fires_the_cycle_once_on_a_decided_bar_and_on_a_hold():
     t = pd.Timestamp("2024-01-18")
     alerts, decided, started = [], [], []
 
@@ -187,9 +189,11 @@ def test_clock_fires_once_on_a_decided_bar_and_never_on_a_hold():
     assert decided == [t] and alerts == [("decision-2024-01-18", Clock().utc_now())]
     assert clock.done and clock.error is None and len(started) == 1
 
+    # A hold still runs the cycle once (marking the account); it decides nothing.
     held = LiveDecisionClock(t, lambda bar: True, "no prediction row")
+    assert not held.decision.decides and not held.done
     held.schedule(Strategy())
-    assert decided == [t] and held.done and not held.fired
+    assert decided == [t, t] and held.done and held.fired
 
 
 def test_a_decision_error_is_kept_for_the_venue():

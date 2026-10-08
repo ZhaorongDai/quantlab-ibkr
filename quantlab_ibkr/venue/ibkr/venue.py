@@ -10,7 +10,9 @@ parts:
 
 - ``LiveDecisionSource``: t's row of the run's live prediction store, its raw
   close and delisting from the run's price dataset;
-- ``LiveDecisionClock``: fires once for t on a rebalance bar, else holds;
+- ``LiveDecisionClock``: fires the cycle of t once; it decides on a rebalance
+  bar with a prediction row (``targets``), and only marks the account on any
+  other day;
 - ``IbkrResolver``: each symbol's IBKR contract as of t, looked up before the
   node starts (``IbapiContractClient``, or an injected ``ContractClient``),
   and the conId cache kept in the live directory between days;
@@ -57,9 +59,11 @@ from quantlab.dataset.base import TickerLookup
 from quantlab.runs.live_predictions import LivePredictionStore
 from quantlab_ibkr.account import derived_cash
 from quantlab_ibkr.base.config import VenueConfig
-from quantlab_ibkr.base.venue import Loop, ReplayRequest, Venue, VenueReport
+from quantlab.portfolio.base import Decision
+from quantlab_ibkr.base.venue import BarInputs, Loop, ReplayRequest, Venue, VenueReport
+from quantlab_ibkr.decision import ConstructorTargets, TargetSource
 from quantlab_ibkr.quantlab_run import QuantlabRun
-from quantlab_ibkr.venue.ibkr.clock import LiveDecisionClock
+from quantlab_ibkr.venue.ibkr.clock import LiveDecision, LiveDecisionClock
 from quantlab_ibkr.venue.ibkr.contracts import IbapiContractClient
 from quantlab_ibkr.venue.ibkr.resolver import (
     UNPARSEABLE_CONTRACT,
@@ -67,6 +71,7 @@ from quantlab_ibkr.venue.ibkr.resolver import (
     IbkrResolver,
     ResolutionGap,
 )
+from quantlab_ibkr.venue.ibkr.reports import IbkrOrderState
 from quantlab_ibkr.venue.ibkr.source import LiveDecisionSource
 from quantlab_ibkr.venue.ibkr.submitter import (
     MAX_ORDERS_PER_SECOND,
@@ -134,6 +139,9 @@ class IbkrVenueConfig(VenueConfig):
     contract_client_id : int or None
         The API client id of the contract lookup made before the node
         starts; ``None`` is ``client_id + 1``.
+    reports_client_id : int or None
+        The API client id the live steps read IBKR's order reports on
+        (``IbapiOrderReports``); ``None`` is ``client_id + 2``.
     max_orders_per_second : int, default 40
         The submitter's pace.
     timeout_secs : float, default 300
@@ -165,6 +173,7 @@ class IbkrVenueConfig(VenueConfig):
     order_deadline: str = ORDER_DEADLINE
     dry_run: bool = False
     contract_client_id: int | None = None
+    reports_client_id: int | None = None
     max_orders_per_second: int = MAX_ORDERS_PER_SECOND
     timeout_secs: float = 300.0
 
@@ -220,6 +229,7 @@ class IbkrVenueConfig(VenueConfig):
         contract_client: ContractClient | None = None,
         ticker_lookup: TickerLookup | None = None,
         now: pd.Timestamp | None = None,
+        working_orders: Iterable[IbkrOrderState] = (),
     ) -> IbkrVenue:
         """Return the venue of today's live day of ``run``; nothing is submitted yet.
 
@@ -238,6 +248,9 @@ class IbkrVenueConfig(VenueConfig):
             Names the symbols as of t; ``None`` is the price dataset's.
         now : pandas.Timestamp, optional
             The current time, for the deadline; ``None`` is the wall clock.
+        working_orders : Iterable of IbkrOrderState, optional
+            The orders already working at IBKR for t (an earlier run of the
+            day): the submitter adopts them instead of sending them again.
 
         Raises
         ------
@@ -264,7 +277,51 @@ class IbkrVenueConfig(VenueConfig):
             contract_client=contract_client,
             ticker_lookup=ticker_lookup,
             now=now,
+            working_orders=working_orders,
         )
+
+
+class LiveTargets(TargetSource):
+    """The live day's targets: the rule's decision when the day decides, nothing otherwise.
+
+    On a day the clock decides (``LiveDecision.decides``) the rule decides t
+    through ``ConstructorTargets``; on a hold (a bar off the cadence, no
+    prediction row) the cycle only marks the account.
+
+    Parameters
+    ----------
+    constructor : ConstructorTargets
+        The closed loop's targets on the run's decision inputs.
+    decision : LiveDecision
+        Whether the day decides.
+
+    Examples
+    --------
+    ::
+
+        cycle = DecisionCycle(venue.targets())
+    """
+
+    def __init__(self, constructor: ConstructorTargets, decision: LiveDecision):
+        self.constructor = constructor
+        self.decision = decision
+
+    def targets(self, inputs: BarInputs, current_weights: pd.Series) -> Decision | None:
+        """Return the rule's decision of t on a deciding day, ``None`` on a hold.
+
+        Examples
+        --------
+        ::
+
+            venue.targets().targets(venue.source.inputs(t), current_weights)
+        """
+        if not self.decision.decides:
+            return None
+        return self.constructor.targets(inputs, current_weights)
+
+    def read_sources(self) -> list[tuple[object, str]]:
+        """The rule's recorded reads (``ConstructorTargets.read_sources``)."""
+        return self.constructor.read_sources()
 
 
 class IbkrVenue(Venue):
@@ -309,6 +366,7 @@ class IbkrVenue(Venue):
         contract_client: ContractClient | None = None,
         ticker_lookup: TickerLookup | None = None,
         now: pd.Timestamp | None = None,
+        working_orders: Iterable[IbkrOrderState] = (),
     ):
         if request.loop is not Loop.CLOSED:
             raise ValueError("the IBKR venue trades closed loop only")
@@ -356,12 +414,31 @@ class IbkrVenue(Venue):
                 self.resolver = self._resolve(symbols, lookup, client, seed)
         else:
             self.resolver = self._resolve(symbols, lookup, contract_client, seed)
+        symbol_of = self.resolver.con_id_cache
         self.submitter = IbkrOpenSubmitter(
             self.resolver,
             order_deadline=config.order_deadline,
             dry_run=config.dry_run,
             max_orders_per_second=config.max_orders_per_second,
+            working={
+                (symbol_of[order.con_id], order.side): order.order_ref
+                for order in working_orders
+                if order.con_id in symbol_of
+            },
         )
+
+    def targets(self) -> LiveTargets:
+        """Return the day's targets: the rule on the run's decision inputs, when t is decided.
+
+        Examples
+        --------
+        ::
+
+            strategy = PortfolioStrategy(
+                venue=venue, cycle=DecisionCycle(venue.targets()), recorder=recorder
+            )
+        """
+        return LiveTargets(ConstructorTargets(self.decision_inputs), self.decision)
 
     def _resolve(
         self,
