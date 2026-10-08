@@ -11,6 +11,11 @@ requires-python = ">=3.13"
 dependencies = [
     "quantlab",
     "nautilus-trader>=1.231.0,<2",  # latest stable; 2.0 is still a release candidate
+    # The IB adapter's client (the live venue, ADR 0010). Pinned as nautilus's
+    # `ib` extra pins it, but not through that extra: it also pins
+    # protobuf==5.29.6, which would move the protobuf quantlab keeps at 7.
+    # ibapi's generated protobuf modules import cleanly on 7.
+    "nautilus-ibapi==10.45.1",
 ]
 
 [project.scripts]

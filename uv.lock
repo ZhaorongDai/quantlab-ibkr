@@ -1749,6 +1749,15 @@ wheels = [
 ]
 
 [[package]]
+name = "nautilus-ibapi"
+version = "10.45.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/da/34/6bdd312813b2fae4a1acde596a769e45e2b69c8ef4ad8eac082e0ec6772e/nautilus_ibapi-10.45.1.tar.gz", hash = "sha256:92540e784793ecb87fc35f2cfb79a067145909deb8356eaf7c1a9e1042ecb374", size = 155663, upload-time = "2026-03-31T23:00:14.865Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/81/46e4ba0b35bf3d5d5d32349ab4f54b1024e6a7e693a10cce3491c701a239/nautilus_ibapi-10.45.1-py3-none-any.whl", hash = "sha256:34ea8df8f520dd587667aab7a9916618d7b372103c2c2c1b68ec3b6e19c69c52", size = 329278, upload-time = "2026-03-31T23:00:13.632Z" },
+]
+
+[[package]]
 name = "nautilus-trader"
 version = "1.231.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3070,6 +3079,7 @@ name = "quantlab-ibkr"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
+    { name = "nautilus-ibapi" },
     { name = "nautilus-trader" },
     { name = "quantlab" },
 ]
@@ -3081,6 +3091,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "nautilus-ibapi", specifier = "==10.45.1" },
     { name = "nautilus-trader", specifier = ">=1.231.0,<2" },
     { name = "quantlab", editable = "../quantlab" },
 ]
