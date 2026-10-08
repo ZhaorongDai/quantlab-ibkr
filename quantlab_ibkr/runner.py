@@ -37,7 +37,11 @@ def run(config: TraderConfig) -> Path:
     quantlab's recorded-read path: a quantlab ``DataRecorder`` keyed as the
     run's backtester keys them (``ConstructorTargets.read_sources``) is open
     while the venue runs, and its records are the trader run's
-    ``data_fingerprint`` (``config.json``); an open loop's is ``None``.
+    ``data_fingerprint`` (``config.json``); an open loop's is ``None``. The
+    closed loop reads the replay window once, inside that recorder, before
+    the venue runs (``ConstructorTargets.preloaded``), so each read is
+    recorded as one request over the window and every bar's context is
+    sliced from memory.
 
     The run is tracked through ``config.tracker``, or the quantlab run's own
     tracker (``NullTracker`` when it had none), in the quantlab run's
@@ -99,7 +103,12 @@ def run(config: TraderConfig) -> Path:
             else None
         )
         with reads or contextlib.nullcontext():
-            report = venue.run(strategy)
+            with (
+                targets.preloaded(start, end)
+                if isinstance(targets, ConstructorTargets)
+                else contextlib.nullcontext()
+            ):
+                report = venue.run(strategy)
         recorder.data_fingerprint = None if reads is None else reads.records
         run_dir = recorder.write(report)
         tracking.update_config(read_config(run_dir))

@@ -146,3 +146,56 @@ def test_a_store_rewritten_after_the_run_fails_the_check_and_is_named(tmp_path, 
 
     assert not check["passed"] and check["agree"] is False
     assert check["differing"] == [key]
+
+
+# The closed loop and the Decision recheck read the replay window once (quantlab
+# #232): every read is one request over the window, the estimate store's
+# included (read a row per rebalance bar, it would end at the last rebalance
+# bar), and a rechecked bar opens no store.
+
+
+def test_the_closed_loop_records_each_read_once_over_the_replay_window(tmp_path):
+    (run_dir, _), window = DECLARING["risk_model"](tmp_path / "quantlab")
+
+    trader = _replay(run_dir, tmp_path, "closed")
+
+    recorded = json.loads((trader / "config.json").read_text())["data_fingerprint"]
+    span = (window[0].isoformat(), window[-1].isoformat())
+    for key in (EXPOSURES, ESTIMATE):
+        (entry,) = recorded[key]
+        assert (entry["request"]["start"], entry["request"]["end"]) == span
+
+
+def test_the_decision_recheck_opens_no_store_per_bar(declaring, tmp_path, monkeypatch):
+    from quantlab_ibkr.decision import ConstructorTargets
+    from quantlab_ibkr.parity.decision_recheck import decision_recheck
+    from quantlab_ibkr.quantlab_run import QuantlabRun
+
+    rule, _, run_dir, window = declaring
+    closed = _replay(run_dir, tmp_path, "closed")
+    run = QuantlabRun.load(run_dir)
+    deciding, opens = [], []
+    for name in ("open_zarr", "open_dataset"):
+        original = getattr(xr, name)
+
+        def counting(*args, _original=original, **kwargs):
+            if deciding:
+                opens.append(args)
+            return _original(*args, **kwargs)
+
+        monkeypatch.setattr(xr, name, counting)
+    decide = ConstructorTargets.decide
+
+    def counted(self, *args):
+        deciding.append(True)
+        try:
+            return decide(self, *args)
+        finally:
+            deciding.pop()
+
+    monkeypatch.setattr(ConstructorTargets, "decide", counted)
+
+    recheck = decision_recheck(run, closed)
+
+    assert recheck["bars_checked"] == len(window[:-1:2]) and recheck["bars_differing"] == 0
+    assert opens == [], rule
