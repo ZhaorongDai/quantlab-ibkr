@@ -3,7 +3,10 @@
 ``<output_dir>/<name>_<loop>_<stamp>/`` holds:
 
 - ``config.json``: the ``TraderConfig`` plus records of the quantlab run (its
-  data fingerprints);
+  data fingerprints, ``quantlab_data_fingerprint``) and the run's own
+  ``data_fingerprint``: the reads of a closed loop's decisions, recorded by
+  quantlab's ``DataRecorder`` under the quantlab run's component paths
+  (``None`` for an open loop);
 - ``decisions.zarr``: ``weight`` on ``(timestamp, symbol)``, one row per
   decision, in rebalance-table format (comparable with ``weights.zarr``),
   and ``current_weight`` on the same axes, the current weights the cycle
@@ -106,6 +109,9 @@ class RunRecorder:
         tracking run can be opened under it before the run.
     metrics : dict or None
         The metrics ``write()`` wrote.
+    data_fingerprint : dict or None
+        The run's recorded reads (a quantlab ``DataRecorder``'s ``records``),
+        set before ``write()``; ``None`` when nothing was recorded.
 
     Examples
     --------
@@ -125,6 +131,7 @@ class RunRecorder:
         stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         self.run_name = f"{name}_{config.loop.value}_{stamp}"
         self.metrics: dict | None = None
+        self.data_fingerprint: dict | None = None
         self._cycles: list[CycleRecord] = []
         self._fills: list[dict] = []
         self._decisions: dict[pd.Timestamp, pd.Series] = {}
@@ -632,6 +639,7 @@ class RunRecorder:
     def _write_config(self, path: Path) -> None:
         config = self.config.get_config()
         config["quantlab_data_fingerprint"] = self.run.data_fingerprint
+        config["data_fingerprint"] = self.data_fingerprint
         path.write_text(json.dumps(config, indent=2))
 
     def _decisions_dataset(self) -> xr.Dataset:

@@ -38,7 +38,9 @@ own; the ladder then checks how nautilus applies them).
 The report directory ``<output_dir>/<run name>_parity_<stamp>/`` holds:
 
 - ``parity.json``: the inputs (run directory, trader runs, the execution
-  block, the data fingerprints and whether they agree, and
+  block, the data fingerprints and whether they agree: L0's and, closed
+  loop, the closed loop's own record and the run's requests re-read through
+  its components, ``fingerprints``; and
   ``closed_loop_refused``, why a run with a prediction panel was not replayed
   closed-loop: ``ClosedLoopRefused``'s message, else ``None``), the end checks
   (``L0_equals_run``, ``T_equals_L5`` and, when the run can be replayed
@@ -68,6 +70,7 @@ This module is the ladder's driver; each step is a module of the package:
 ``checks``             the end checks (``L0_equals_run``, ``T_equals_L5``)
 ``closed_loop``        the closed-versus-open block
 ``decision_recheck``   its Decision recheck
+``fingerprints``       the data check (``data_fingerprints_agree``)
 ``report``             the statistics rows, ``parity.json`` and ``parity.zarr``
 =====================  ===================================================
 """
@@ -85,6 +88,13 @@ from quantlab_ibkr.base.venue import Loop
 from quantlab_ibkr.parity.checks import l0_check, t_check
 from quantlab_ibkr.parity.closed_loop import closed_vs_open
 from quantlab_ibkr.parity.decision_recheck import decision_recheck
+from quantlab_ibkr.parity.fingerprints import (
+    closed_loop_reread,
+    combined_agreement,
+    compared_keys,
+    differing_keys,
+    fingerprints_agree as _fingerprints_agree,
+)
 from quantlab_ibkr.parity.market import Market
 from quantlab_ibkr.parity.quantlab_rungs import quantlab_rung
 from quantlab_ibkr.parity.report import Statistics, report_dir, rung_rows, write_report
@@ -175,11 +185,27 @@ def parity(quantlab_run, *, output_dir=None, execution: ExecutionConfig | None =
     partial.mkdir(parents=True)
     try:
         report, closed = _ladder_end(run, table, market, rungs, execution, partial, parity_dir)
-        report["inputs"]["data_fingerprint"] = run.data_fingerprint
-        report["inputs"]["rerun_data_fingerprint"] = fingerprint
-        agree = _fingerprints_agree(run.data_fingerprint, fingerprint)
-        report["inputs"]["fingerprints_agree"] = agree
-        report["checks"]["data_fingerprints_agree"] = {"passed": agree is not False, "agree": agree}
+        inputs = report["inputs"]
+        inputs["data_fingerprint"] = run.data_fingerprint
+        inputs["rerun_data_fingerprint"] = fingerprint
+        reread = inputs.get("closed_loop_reread_data_fingerprint")
+        agree = combined_agreement(
+            _fingerprints_agree(run.data_fingerprint, fingerprint),
+            _fingerprints_agree(run.data_fingerprint, reread),
+        )
+        inputs["fingerprints_agree"] = agree
+        report["checks"]["data_fingerprints_agree"] = {
+            "passed": agree is not False,
+            "agree": agree,
+            "compared": {
+                "L0": compared_keys(run.data_fingerprint, fingerprint),
+                "closed_loop": compared_keys(run.data_fingerprint, reread),
+            },
+            "differing": sorted(
+                set(differing_keys(run.data_fingerprint, fingerprint))
+                | set(differing_keys(run.data_fingerprint, reread))
+            ),
+        }
         write_report(partial, report, rungs, closed)
         partial.rename(parity_dir)
     except BaseException:
@@ -207,6 +233,8 @@ def _ladder_end(run, table, market, rungs, execution, partial: Path, parity_dir:
         "trader_run": str(parity_dir / "trader" / trader_dir.name),
         "closed_loop_run": None,
         "closed_loop_refused": None,
+        "closed_loop_data_fingerprint": None,
+        "closed_loop_reread_data_fingerprint": None,
         "execution": execution.get_config(),
         "rung_order": list(RUNGS),
         "reference_ledger": LEDGER_NOTE,
@@ -220,6 +248,10 @@ def _ladder_end(run, table, market, rungs, execution, partial: Path, parity_dir:
             inputs["closed_loop_refused"] = str(refusal)
     if closed_dir is not None:
         inputs["closed_loop_run"] = str(parity_dir / "trader" / closed_dir.name)
+        (
+            inputs["closed_loop_data_fingerprint"],
+            inputs["closed_loop_reread_data_fingerprint"],
+        ) = closed_loop_reread(run, closed_dir)
         closed = trader_rung(closed_dir, market, execution, name="closed")
         loops = closed_vs_open(run, table, market, rungs, closed, closed_dir, statistics)
         checks["closed_weights_equal_on_holding_independent_bars"] = {
@@ -251,26 +283,6 @@ def _resolved(execution: ExecutionConfig, run: QuantlabRun) -> ExecutionConfig:
         slippage=run.slippage if execution.slippage is None else execution.slippage,
         init_cash=run.init_cash if execution.init_cash is None else execution.init_cash,
     )
-
-
-def _fingerprints_agree(recorded: dict | None, rerun: dict | None) -> bool | None:
-    """Whether L0 read the data the run recorded; ``None`` when they share no request.
-
-    A quantlab data fingerprint maps a component path to one entry per
-    distinct request. The entries both sides hold (same key, same
-    ``request``) are compared by ``digest`` alone, as quantlab compares.
-    """
-    recorded, rerun = recorded or {}, rerun or {}
-    shared = [
-        (entry["digest"], other["digest"])
-        for key in sorted(set(recorded) & set(rerun))
-        for entry in recorded[key]
-        for other in rerun[key]
-        if entry["request"] == other["request"]
-    ]
-    if not shared:
-        return None
-    return all(old == new for old, new in shared)
 
 
 def _trader_run(run: QuantlabRun, execution: ExecutionConfig, loop: Loop, output_dir: Path) -> Path:

@@ -16,6 +16,9 @@ backtester assembles: tradability, the rebalance schedule, the rule's
 ``CrossSectionBacktestConfig``
 carrying the rule (so the run's recipe records it), and the panel written
 where a run with a model keeps its prediction panel (``PREDICTION_PANEL``).
+What the rule read while deciding (its factors, a risk model's exposures and
+estimate) is recorded under the backtester's component paths and added to the
+run's ``data_fingerprint``, as quantlab's ``run()`` records it.
 
 ``build_factor_risk_run`` is a ``build_constructor_run`` whose rule is
 mean-variance on a real factor risk model (ADR 0011): quantlab's
@@ -40,6 +43,7 @@ fixed multiple of the raw one so a raw/adjusted mix-up shows in the numbers.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
@@ -60,6 +64,8 @@ from quantlab.tracking.base import Tracker
 from quantlab.dataset.crsp import CrspStockDataset
 from quantlab.dataset.stock import StockDataset
 from quantlab.portfolio.decision_inputs import DecisionInputs
+from quantlab.core.component import walk_components
+from quantlab.runs.record import DataRecorder
 from tests.factor_risk_fixture import factor_risk_model, risk_model_variables
 
 #: Where a quantlab run with a model keeps its prediction panel; the fixture
@@ -282,16 +288,6 @@ def build_constructor_run(
         coords={"timestamp": window, "symbol": symbols},
     )
     rule.bind(labels)
-    weights = DecisionInputs(
-        dataset,
-        rule,
-        fill_column="adjOpen",
-        valuation_column="adjClose",
-        rebalance_periods=rebalance_periods,
-        anchor=first,
-    ).weights(panel, delisted=dataset.delisting_bars(prices, "adjClose"))
-    failed = list(weights.attrs.pop("failed_bars"))
-    weights.attrs.clear()
     backtester = USEquityCrossectionSelectStockVectorBt(
         CrossSectionBacktestConfig(
             price_dataset=dataset,
@@ -305,11 +301,41 @@ def build_constructor_run(
             init_cash=init_cash,
         )
     )
+    # Keyed as quantlab's backtester keys the reads of run() (its components' paths).
+    with DataRecorder(keys=[(item, path) for path, item in walk_components(backtester)]) as reads:
+        weights = DecisionInputs(
+            dataset,
+            rule,
+            fill_column="adjOpen",
+            valuation_column="adjClose",
+            rebalance_periods=rebalance_periods,
+            anchor=first,
+        ).weights(panel, delisted=dataset.delisting_bars(prices, "adjClose"))
+    failed = list(weights.attrs.pop("failed_bars"))
+    weights.attrs.clear()
     run_dir = Path(backtester.run_weights(weights).run_dir)
+    _add_reads(run_dir, reads.records)
     # A model-free stand-in for a run with a model: the panel goes where
     # quantlab's BacktestRun.predictions reads a run's prediction panel.
     PredictionPanel(panel, labels).write(run_dir / PREDICTION_PANEL)
     return run_dir, failed
+
+
+def _add_reads(run_dir: Path, records: Mapping[str, list[dict]]) -> None:
+    """Add the rule's recorded reads to the run's ``data_fingerprint`` in ``run.json``.
+
+    ``run_weights`` records only the window's price read; quantlab's ``run()``
+    records the rule's reads too, in the same recorder. A request already
+    recorded is kept once.
+    """
+    path = run_dir / "run.json"
+    record = json.loads(path.read_text())
+    fingerprint = record.setdefault("data_fingerprint", {})
+    for key, entries in records.items():
+        kept = fingerprint.setdefault(key, [])
+        requests = [entry["request"] for entry in kept]
+        kept.extend(entry for entry in entries if entry["request"] not in requests)
+    path.write_text(json.dumps(record, indent=2))
 
 
 def build_factor_risk_run(

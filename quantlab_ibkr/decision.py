@@ -25,6 +25,7 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
+from quantlab.core.component import walk_components
 from quantlab.portfolio.base import Decision
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab_ibkr._support.jsonable import python_scalar
@@ -305,6 +306,58 @@ class ConstructorTargets(TargetSource):
             xr.DataArray(held.to_numpy(dtype=float), dims="symbol", coords={"symbol": held.index}),
         )
         return self.decision_inputs.constructor.decide(context)
+
+    def read_sources(self) -> list[tuple[object, str]]:
+        """Return the components the rule's contexts read, each with the key quantlab records it under.
+
+        Keyed as quantlab's cross-section backtester keys the reads of
+        ``run()`` (its components' paths): the price dataset is
+        ``"price_dataset"``, the rule ``"constructor"`` and everything under
+        it ``"constructor.<path>"`` (a factor risk model's exposures factor
+        ``"constructor.covariance.risk_model.exposures"``, its estimate store
+        recorded under the model's key plus ``.estimate``). A component held
+        at several places in the run is recorded under its first path; the
+        run's components are rebuilt one by one, so a component equal in
+        config to one at an earlier path (a factor's dataset that is the
+        price dataset) takes that path's key. The pairs are quantlab
+        ``DataRecorder``'s ``keys``.
+
+        Examples
+        --------
+        >>> from quantlab.portfolio.config import TopNConfig
+        >>> from quantlab.dataset.memory import FrameDataset
+        >>> from quantlab.portfolio.predefined.top_n import TopNConstructor
+        >>> bars = pd.bdate_range("2024-01-02", periods=2)
+        >>> price = xr.DataArray(
+        ...     [[30.0]] * 2, dims=("timestamp", "symbol"), coords={"timestamp": bars, "symbol": ["AAA"]}
+        ... )
+        >>> source = ConstructorTargets(DecisionInputs(
+        ...     FrameDataset(xr.Dataset({"adjOpen": price, "adjClose": price})),
+        ...     TopNConstructor(TopNConfig(direction="long_only", top_n=1)),
+        ...     fill_column="adjOpen", valuation_column="adjClose",
+        ...     rebalance_periods=1, anchor=bars[0],
+        ... ))
+        >>> [key for _, key in source.read_sources()]
+        ['price_dataset', 'constructor']
+        """
+        constructor = self.decision_inputs.constructor
+        found = [
+            ("price_dataset", self.decision_inputs.dataset),
+            ("constructor", constructor),
+            *walk_components(constructor, "constructor"),
+        ]
+        first: list[tuple[type, dict, str]] = []  # (class, config, first path)
+        sources = []
+        for path, item in found:
+            config = item.get_config()
+            key = next(
+                (p for cls, c, p in first if cls is type(item) and c == config), None
+            )
+            if key is None:
+                first.append((type(item), config, path))
+                key = path
+            sources.append((item, key))
+        return sources
 
 
 class DecisionCycle:

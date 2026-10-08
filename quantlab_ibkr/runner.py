@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from quantlab.runs.record import DataRecorder
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.base.venue import Loop, ReplayRequest
 from quantlab_ibkr.decision import (
@@ -30,7 +32,12 @@ def run(config: TraderConfig) -> Path:
     Closed loop (ADR 0001, 0008) rebuilds the run's decision inputs
     (quantlab's ``DecisionInputs``) and decides every rebalance bar on the
     account's holdings with the run's prediction panel; open loop executes
-    the run's rebalance table.
+    the run's rebalance table. A closed loop's reads (the rule's prices,
+    factors, a factor risk model's exposures and estimate) go through
+    quantlab's recorded-read path: a quantlab ``DataRecorder`` keyed as the
+    run's backtester keys them (``ConstructorTargets.read_sources``) is open
+    while the venue runs, and its records are the trader run's
+    ``data_fingerprint`` (``config.json``); an open loop's is ``None``.
 
     The run is tracked through ``config.tracker``, or the quantlab run's own
     tracker (``NullTracker`` when it had none), in the quantlab run's
@@ -86,7 +93,15 @@ def run(config: TraderConfig) -> Path:
         name=recorder.run_name,
         config=config.get_config(),
     ) as tracking:
-        run_dir = recorder.write(venue.run(strategy))
+        reads = (
+            DataRecorder(keys=targets.read_sources(), owner=recorder.run_name)
+            if isinstance(targets, ConstructorTargets)
+            else None
+        )
+        with reads or contextlib.nullcontext():
+            report = venue.run(strategy)
+        recorder.data_fingerprint = None if reads is None else reads.records
+        run_dir = recorder.write(report)
         tracking.update_config(read_config(run_dir))
         tracking.summarize(
             {

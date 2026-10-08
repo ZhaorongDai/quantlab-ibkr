@@ -66,6 +66,7 @@ ALLOWED = {
     "quantlab.runs.backtest_report",
     "quantlab.runs.backtest_stats",
     "quantlab.utils.date_range",
+    "quantlab.runs.record",
 }
 
 #: Module prefixes that must never load in a trader process. quantlab's
