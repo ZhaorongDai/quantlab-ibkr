@@ -19,7 +19,7 @@ command exits with 2 when one fails) and, for a run with a prediction panel, clo
 loop with its Decision recheck (quantlab's rule run again on each closed-loop decision's context,
 actual holdings included, which must give the decided weights bit for bit).
 
-The design is in `docs/adr/`; the v1 spec is issue #18.
+The v1 spec is issue #18.
 
 ## Live trading (IBKR paper)
 
