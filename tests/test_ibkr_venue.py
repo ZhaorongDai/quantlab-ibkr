@@ -305,6 +305,9 @@ def test_venue_assembles_the_node_without_connecting(live_run):
             1001, 1002, 1004
         ]
     assert exec_.account_id == "DU1234567"
+    # Loading every contract can take minutes (us3000: about 3,000); the
+    # engines may take the run's whole timeout to connect.
+    assert config.timeout_connection == venue.config.timeout_secs
 
     loop = asyncio.new_event_loop()
     try:

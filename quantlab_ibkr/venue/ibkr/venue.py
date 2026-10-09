@@ -150,7 +150,9 @@ class IbkrVenueConfig(VenueConfig):
         The submitter's pace.
     timeout_secs : float, default 300
         How long a run waits for the node to connect, reconcile, decide and
-        have the orders accepted before it stops anyway (``timed_out``).
+        have the orders accepted before it stops anyway (``timed_out``). It
+        is also the node's connection timeout: the clients connect only once
+        every resolved contract is loaded, about a minute per 1,000.
 
     Raises
     ------
@@ -523,6 +525,8 @@ class IbkrVenue(Venue):
         }
         return TradingNodeConfig(
             trader_id=TraderId(TRADER_ID),
+            # The default 60 s runs the node before ~3,000 contracts are loaded.
+            timeout_connection=self.config.timeout_secs,
             logging=LoggingConfig(log_level="INFO"),
             exec_engine=LiveExecEngineConfig(reconciliation=True),
             risk_engine=LiveRiskEngineConfig(max_order_submit_rate=MAX_ORDER_SUBMIT_RATE),
