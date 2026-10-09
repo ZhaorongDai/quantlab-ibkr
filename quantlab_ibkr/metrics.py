@@ -125,8 +125,13 @@ def window_benchmark(returns: xr.DataArray, timestamps) -> xr.DataArray:
     >>> run_returns = xr.DataArray([0.0, 0.01, 0.02], dims="timestamp", coords={"timestamp": bars})
     >>> window_benchmark(run_returns, bars[1:]).values.tolist()
     [0.0, 0.02]
+    >>> later = pd.bdate_range("2024-01-03", periods=3)
+    >>> window_benchmark(run_returns, later).values.tolist()
+    [0.0, 0.02, nan]
     """
-    window = returns.sel(timestamp=timestamps).copy()
+    # A bar the benchmark has not published yet (a live day marked before
+    # the vendor's evening update) is NaN, not an error.
+    window = returns.reindex(timestamp=timestamps).copy()
     window[0] = 0.0
     return window
 
