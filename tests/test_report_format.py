@@ -102,9 +102,14 @@ def test_chart_inputs_name_and_draw_the_benchmark_as_quantlab_does(replay):
     assert set(trader) - {"extra_tables"} == set(quantlab) - {"attribution", "factor_attribution"}
     for name in ("in_sample_range", "init_cash", "benchmark_name", "bars_per_year"):
         assert trader[name] == quantlab[name], name
-    np.testing.assert_allclose(
-        trader["benchmark_value"].values, quantlab["benchmark_value"].values, rtol=1e-12
-    )
+    # The benchmark is the benchmark dataset's price return held from the
+    # first close (no entry fee), read from the dataset so a live day past
+    # the run's window has it; quantlab's own curve also charged the fee on
+    # buying it, a constant factor 1 / (1 + fees) from the second bar on.
+    fees = replay["fees"] if "fees" in replay else 0.001
+    expected = quantlab["benchmark_value"].values.copy()
+    expected[1:] *= 1.0 + fees
+    np.testing.assert_allclose(trader["benchmark_value"].values, expected, rtol=1e-12)
 
 
 def test_portfolio_tab_draws_the_decided_targets(replay):

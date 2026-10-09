@@ -201,7 +201,7 @@ def run_metrics(
             equity=equity, fills=fills, orders=orders, cycles=cycles, events=events,
             closes=closes, init_cash=1_000_000.0, bar_interval=pd.Timedelta("1D"),
             year_freq=backtest_stats.year_freq("1D", 252, 390), rebalance_periods=5,
-            split=run.split(), benchmark=run.benchmark(), closed_loop=True, notes=NOTES,
+            split=run.split(), benchmark=run.benchmark(start, end), closed_loop=True, notes=NOTES,
         )
         metrics["whole"]["Total Return [%]"]
     """

@@ -682,7 +682,7 @@ class RunRecorder:
             .to_pandas()
         )
         closes.columns = [python_scalar(v) for v in closes.columns]
-        benchmark = run.benchmark()
+        benchmark = run.benchmark(timestamps[0], timestamps[-1])
         fills = self._fills_dataset(report)
         # A live run's fills at the open after its last marked close (the
         # record step runs before that bar closes) join the metrics with the

@@ -227,13 +227,16 @@ def test_benchmark_and_relative_follow_the_quantlab_run_benchmark(tmp_path):
 
     benchmark = metrics["benchmark"]
     assert benchmark["axis_symbol"] == quantlab_metrics["benchmark"]["axis_symbol"]
+    # The benchmark dataset's price return, without quantlab's entry fee (0.1%).
+    quantlab_total = quantlab_metrics["benchmark"]["whole"]["Total Return [%]"]
+    bench_total = ((1 + quantlab_total / 100) * 1.001 - 1) * 100
     assert benchmark["whole"]["Total Return [%]"] == pytest.approx(
-        quantlab_metrics["benchmark"]["whole"]["Total Return [%]"], rel=1e-12
+        bench_total, rel=1e-12
     )
     relative = metrics["relative"]["whole"]
     assert relative["Strategy Total Return [%]"] == pytest.approx(27.4687, abs=1e-9)
     assert relative["Total Return Difference [%]"] == pytest.approx(
-        27.4687 - quantlab_metrics["benchmark"]["whole"]["Total Return [%]"], abs=1e-9
+        27.4687 - bench_total, abs=1e-9
     )
     assert relative["Bars"] == 6
     assert "Rebalance Win Rate vs Benchmark [%]" in relative
@@ -343,3 +346,4 @@ def test_a_narrowed_window_measures_the_benchmark_from_its_first_close(tmp_path)
     assert _metrics(run_dir)["relative"]["whole"]["Benchmark Total Return [%]"] == pytest.approx(
         expected, rel=1e-12
     )
+

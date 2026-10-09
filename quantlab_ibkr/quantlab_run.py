@@ -215,30 +215,41 @@ class QuantlabRun:
         level = metrics.get("stitched", metrics)
         return {key: level[key] for key in SPLIT_KEYS if key in level}
 
-    def benchmark(self) -> dict | None:
-        """Return the run's benchmark, or ``None`` when it had none.
+    def benchmark(self, start: pd.Timestamp, end: pd.Timestamp) -> dict | None:
+        """Return the run's benchmark over ``start``..``end``, or ``None`` when it had none.
+
+        The returns are read from the run's benchmark dataset (its store is
+        kept current every day), never from the run's own equity curve, which
+        ends with the run's window while a live trader's bars go on.
 
         Returns
         -------
         dict or None
-            ``returns``: the benchmark's per-bar returns on the run's bars
-            (its equity curve's ``benchmark_returns``); ``symbol`` and
-            ``axis_symbol``: its names from the run's metrics.
+            ``returns``: the benchmark's one-bar returns of its valuation
+            price on the dataset's bars from ``start`` to ``end`` (the first
+            0); ``symbol`` and ``axis_symbol``: its names from the run's
+            metrics.
 
         Examples
         --------
         ::
 
-            benchmark = run.benchmark()
+            benchmark = run.benchmark(start, end)
             returns = None if benchmark is None else benchmark["returns"]
         """
-        equity = self.backtest_run.equity()
-        if "benchmark_returns" not in equity:
+        if self.backtest_run.benchmark_source is None:
             return None
+        dataset = self.backtest_run.rebuild("benchmark_dataset")
+        prices = dataset.panel(pd.Timestamp(start), pd.Timestamp(end))[
+            self.market.valuation_price_column
+        ]
+        if "symbol" in prices.dims:
+            prices = prices.isel(symbol=0, drop=True)
+        returns = (prices / prices.shift(timestamp=1) - 1.0).fillna(0.0)
         metrics = self.backtest_run.metrics()
         info = metrics.get("stitched", metrics).get("benchmark") or {}
         return {
-            "returns": equity["benchmark_returns"],
+            "returns": returns,
             "symbol": info.get("symbol"),
             "axis_symbol": info.get("axis_symbol"),
         }
