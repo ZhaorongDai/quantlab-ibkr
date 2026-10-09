@@ -51,7 +51,7 @@ MORNING_CUTOFF=${MORNING_CUTOFF:-08:30}
 DECIDE_AT=${DECIDE_AT:-07:15}
 LATE_AT=${LATE_AT:-09:00}
 AFTER_OPEN_AT=${AFTER_OPEN_AT:-09:31}
-MIRROR=${MIRROR:-$DATA_DIR/pipeline/sharadar_sp500/prices.zarr}
+MIRROR=${MIRROR:-$DATA_DIR/market/sharadar/sp500_prices/sp500_prices.zarr}
 PREPARE=${PREPARE:-}
 
 ny() { TZ=America/New_York date "$@"; }
@@ -88,7 +88,7 @@ update_sharadar() {
     (load_env "$HOME/.config/quantlab/sharadar.env"
      cd "$QUANTLAB_DIR" &&
      QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" scripts/sharadar/update.py --rebuild-dropped \
-         --download-dir "$DATA_DIR/downloads" --zarr-dir "$DATA_DIR/zarrs")
+         --download-dir "$DATA_DIR/downloads" --data-dir "$DATA_DIR")
 }
 
 # The strategy's own stores the prediction job does not extend (PREPARE).
@@ -113,7 +113,7 @@ predict_day() {
      QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" scripts/live/predict_day.py "$run_dir" \
          --store "$LIVE_DIR/live_predictions.zarr" \
          --mirror "$MIRROR" \
-         --may-lag "$DATA_DIR/zarrs/fred_dtb3_1d.zarr")
+         --may-lag "$DATA_DIR/market/fred/fred_dtb3_1d/fred_dtb3_1d.zarr")
 }
 
 live() {
