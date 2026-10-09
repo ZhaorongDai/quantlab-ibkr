@@ -9,8 +9,11 @@
 # 06 ET  morning: wait until quantlab's daily data update (its own cron,
 #        quantlab scripts/data_update/update_daily.sh) has written "done" for today
 #        in <DATA_DIR>/update_status.json, checking every RETRY_MINUTES until
-#        MORNING_CUTOFF (a day the vendor publishes nothing new is never
-#        carried forward); then quantlab's daily prediction job; then, from
+#        MORNING_CUTOFF (09:25: the update's raw stage retries until 08:30 and
+#        its factor and risk stages run after it, so the wait must outlast them;
+#        decide already falls back to --after-open from LATE_AT; a day the vendor
+#        publishes nothing new is never carried forward); then quantlab's daily
+#        prediction job; then, from
 #        DECIDE_AT (07:15), `quantlab-ibkr live decide`
 #        (market-on-open orders before the 09:20 deadline). Only if the auction
 #        is missed (the decide step reaches LATE_AT, or decide is refused for
@@ -40,7 +43,7 @@ CPUS=${CPUS:-64-127}
 PY=$IBKR_DIR/.venv/bin/python
 CONFIG=$LIVE_DIR/live.json
 RETRY_MINUTES=${RETRY_MINUTES:-15}
-MORNING_CUTOFF=${MORNING_CUTOFF:-08:30}
+MORNING_CUTOFF=${MORNING_CUTOFF:-09:25}
 # After the IB Gateway's daily restart at 07:00 (~/ib-gateway/restart_daily.sh);
 # the contract lookup and the node take ~20 minutes for ~3,000 symbols.
 DECIDE_AT=${DECIDE_AT:-07:15}
@@ -79,15 +82,29 @@ retry_until_cutoff() {
 }
 
 # Whether quantlab's data update has written "done" for today (New York date).
+# The status file's fields (date, state, t, last_done_t) are the contract set
+# out in quantlab's docs/data_update.md ("The status file").
+# Prints the date and state found; exits 0 when done today, 2 when not yet,
+# 4 when the file is missing or unreadable.
 data_ready() {
     "$PY" -c 'import json,sys
-s = json.load(open(sys.argv[1]))
+try:
+    s = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(4)
+print(s.get("date"), s.get("state"))
 sys.exit(0 if s.get("date") == sys.argv[2] and s.get("state") == "done" else 2)' \
         "$DATA_DIR/update_status.json" "$(ny +%F)" 2>/dev/null
 }
 
 wait_and_predict() {
-    data_ready || { log "data update: not done for $(ny +%F) yet"; return 2; }
+    local found status
+    found=$(data_ready); status=$?
+    case $status in
+        0) ;;
+        4) log "data update: $DATA_DIR/update_status.json missing or unreadable"; return 2 ;;
+        *) log "data update: not done for $(ny +%F) yet (date state: ${found:-?})"; return 2 ;;
+    esac
     predict_day
 }
 
