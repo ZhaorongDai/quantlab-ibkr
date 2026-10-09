@@ -10,7 +10,11 @@
 #        daily prediction job; the pair is retried every RETRY_MINUTES until
 #        the job has t's row or MORNING_CUTOFF passes (a late vendor table,
 #        such as SP500 membership a day behind SEP, is waited for, never
-#        carried forward); then, from DECIDE_AT, `quantlab-ibkr live decide`.
+#        carried forward); then, from DECIDE_AT, `quantlab-ibkr live decide`
+#        (market-on-open orders before the 09:20 deadline). Only if the auction
+#        is missed (the decide step reaches LATE_AT, or decide is refused for
+#        its order deadline) does it decide again from AFTER_OPEN_AT with
+#        --after-open: day market orders after the open.
 #        update.py's own exit status does not stop the morning: a store the
 #        strategy does not read may fail, and the job checks every input it
 #        reads holds t.
@@ -43,6 +47,8 @@ CONFIG=$LIVE_DIR/live.json
 RETRY_MINUTES=${RETRY_MINUTES:-15}
 MORNING_CUTOFF=${MORNING_CUTOFF:-08:30}
 DECIDE_AT=${DECIDE_AT:-08:35}
+LATE_AT=${LATE_AT:-09:00}
+AFTER_OPEN_AT=${AFTER_OPEN_AT:-09:31}
 MIRROR=${MIRROR:-$DATA_DIR/pipeline/sharadar_sp500/prices.zarr}
 PREPARE=${PREPARE:-}
 
@@ -121,10 +127,29 @@ morning() {
     # predict_day.py: 0 appended, 3 already predicted, 2 data missing (retry).
     OK_CODES="0 3" retry_until_cutoff "update and prediction job" update_and_predict || return 1
     while [[ "$(now_hm)" < "$DECIDE_AT" ]]; do sleep 60; done
+    if [[ ! "$(now_hm)" < "$LATE_AT" ]]; then
+        log "decide: $LATE_AT passed, the opening auction is out of reach"
+        after_open; return $?
+    fi
     log "decide: start ${DECIDE_FLAGS:-}"
+    local mark; mark=$(wc -l < "$log_file")
     # shellcheck disable=SC2086
     live decide ${DECIDE_FLAGS:-}; local status=$?
     log "decide: exit $status"
+    if [ "$status" -ne 0 ] && tail -n +"$mark" "$log_file" | grep -q "order deadline"; then
+        log "decide: refused for its order deadline"
+        after_open; return $?
+    fi
+    return "$status"
+}
+
+# The opening auction was missed: decide with day market orders after the open.
+after_open() {
+    while [[ "$(now_hm)" < "$AFTER_OPEN_AT" ]]; do sleep 30; done
+    log "decide --after-open: start ${DECIDE_FLAGS:-}"
+    # shellcheck disable=SC2086
+    live decide --after-open ${DECIDE_FLAGS:-}; local status=$?
+    log "decide --after-open: exit $status"
     return "$status"
 }
 
