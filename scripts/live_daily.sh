@@ -6,18 +6,17 @@
 #
 #   0 * * * * $HOME/projects/quantlab-ibkr/scripts/live_daily.sh
 #
-# 06 ET  morning: Sharadar update.py (--rebuild-dropped), then quantlab's
-#        daily prediction job; the pair is retried every RETRY_MINUTES until
-#        the job has t's row or MORNING_CUTOFF passes (a late vendor table,
-#        such as SP500 membership a day behind SEP, is waited for, never
-#        carried forward); then, from DECIDE_AT (07:15), `quantlab-ibkr live decide`
+# 06 ET  morning: wait until quantlab's daily data update (its own cron,
+#        quantlab scripts/data_update/update_daily.sh) has written "done" for today
+#        in <DATA_DIR>/update_status.json, checking every RETRY_MINUTES until
+#        MORNING_CUTOFF (a day the vendor publishes nothing new is never
+#        carried forward); then quantlab's daily prediction job; then, from
+#        DECIDE_AT (07:15), `quantlab-ibkr live decide`
 #        (market-on-open orders before the 09:20 deadline). Only if the auction
 #        is missed (the decide step reaches LATE_AT, or decide is refused for
 #        its order deadline) does it decide again from AFTER_OPEN_AT with
 #        --after-open: day market orders after the open.
-#        update.py's own exit status does not stop the morning: a store the
-#        strategy does not read may fail, and the job checks every input it
-#        reads holds t.
+#        The prediction job checks every input it reads holds t.
 # 10 ET  record: `quantlab-ibkr live record` (fills, then the Decision recheck).
 #
 # A step that has not succeeded by its cut-off holds the day: no order is
@@ -25,15 +24,11 @@
 # step finds t already decided and does nothing.
 #
 # Environment (files readable by the owner only):
-#   ~/.config/quantlab/sharadar.env  SHARADAR_API_KEY (read by update.py only)
 #   ~/.config/quantlab/ibkr.env      TWS_ACCOUNT (the paper account, DU...)
 # Overrides: LIVE_DIR, QUANTLAB_DIR, IBKR_DIR, DATA_DIR, CPUS, the times
 # below, DECIDE_FLAGS (e.g. "--dry-run": decide and print, submit nothing),
-# MIRROR (the store predict_day.py mirrors from the price store; the S&P 500
-# strategy's prices.zarr by default) and PREPARE (a command run in
-# QUANTLAB_DIR after the vendor update and before the prediction job, for the
-# stores the job does not extend; the us3000 strategy's is
-# "examples/sharadar_us_equity/us3000_h1_mvo.py prepare-day").
+# and MIRROR (the store predict_day.py mirrors from the price store; the S&P 500
+# strategy's prices slice by default).
 # `live_daily.sh morning|record` runs one step now.
 set -u
 
@@ -52,7 +47,6 @@ DECIDE_AT=${DECIDE_AT:-07:15}
 LATE_AT=${LATE_AT:-09:00}
 AFTER_OPEN_AT=${AFTER_OPEN_AT:-09:31}
 MIRROR=${MIRROR:-$DATA_DIR/market/sharadar/sp500_prices/sp500_prices.zarr}
-PREPARE=${PREPARE:-}
 
 ny() { TZ=America/New_York date "$@"; }
 now_hm() { ny +%H:%M; }
@@ -84,25 +78,16 @@ retry_until_cutoff() {
     done
 }
 
-update_sharadar() {
-    (load_env "$HOME/.config/quantlab/sharadar.env"
-     cd "$QUANTLAB_DIR" &&
-     QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" scripts/sharadar/update.py --rebuild-dropped \
-         --download-dir "$DATA_DIR/downloads" --data-dir "$DATA_DIR")
+# Whether quantlab's data update has written "done" for today (New York date).
+data_ready() {
+    "$PY" -c 'import json,sys
+s = json.load(open(sys.argv[1]))
+sys.exit(0 if s.get("date") == sys.argv[2] and s.get("state") == "done" else 2)' \
+        "$DATA_DIR/update_status.json" "$(ny +%F)" 2>/dev/null
 }
 
-# The strategy's own stores the prediction job does not extend (PREPARE).
-prepare_stores() {
-    [ -n "$PREPARE" ] || return 0
-    # shellcheck disable=SC2086
-    (cd "$QUANTLAB_DIR" && QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" $PREPARE)
-}
-
-# One round: update the vendor stores (status logged, not used), prepare the
-# strategy's stores, then the prediction job, whose status is the round's.
-update_and_predict() {
-    update_sharadar; log "sharadar update: exit $?"
-    prepare_stores || { local status=$?; log "prepare: exit $status"; return "$status"; }
+wait_and_predict() {
+    data_ready || { log "data update: not done for $(ny +%F) yet"; return 2; }
     predict_day
 }
 
@@ -127,7 +112,7 @@ morning() {
     flock -n 9 || { log "morning: already running"; return 0; }
     log "morning: begin"
     # predict_day.py: 0 appended, 3 already predicted, 2 data missing (retry).
-    OK_CODES="0 3" retry_until_cutoff "update and prediction job" update_and_predict || return 1
+    OK_CODES="0 3" retry_until_cutoff "data and prediction job" wait_and_predict || return 1
     while [[ "$(now_hm)" < "$DECIDE_AT" ]]; do sleep 60; done
     if [[ ! "$(now_hm)" < "$LATE_AT" ]]; then
         log "decide: $LATE_AT passed, the opening auction is out of reach"
