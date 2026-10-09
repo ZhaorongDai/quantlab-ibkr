@@ -10,7 +10,7 @@
 #        daily prediction job; the pair is retried every RETRY_MINUTES until
 #        the job has t's row or MORNING_CUTOFF passes (a late vendor table,
 #        such as SP500 membership a day behind SEP, is waited for, never
-#        carried forward); then, from DECIDE_AT, `quantlab-ibkr live decide`
+#        carried forward); then, from DECIDE_AT (07:15), `quantlab-ibkr live decide`
 #        (market-on-open orders before the 09:20 deadline). Only if the auction
 #        is missed (the decide step reaches LATE_AT, or decide is refused for
 #        its order deadline) does it decide again from AFTER_OPEN_AT with
@@ -46,7 +46,9 @@ PY=$IBKR_DIR/.venv/bin/python
 CONFIG=$LIVE_DIR/live.json
 RETRY_MINUTES=${RETRY_MINUTES:-15}
 MORNING_CUTOFF=${MORNING_CUTOFF:-08:30}
-DECIDE_AT=${DECIDE_AT:-08:35}
+# After the IB Gateway's daily restart at 07:00 (~/ib-gateway/restart_daily.sh);
+# the contract lookup and the node take ~20 minutes for ~3,000 symbols.
+DECIDE_AT=${DECIDE_AT:-07:15}
 LATE_AT=${LATE_AT:-09:00}
 AFTER_OPEN_AT=${AFTER_OPEN_AT:-09:31}
 MIRROR=${MIRROR:-$DATA_DIR/pipeline/sharadar_sp500/prices.zarr}
