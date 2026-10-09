@@ -24,7 +24,12 @@
 #   ~/.config/quantlab/sharadar.env  SHARADAR_API_KEY (read by update.py only)
 #   ~/.config/quantlab/ibkr.env      TWS_ACCOUNT (the paper account, DU...)
 # Overrides: LIVE_DIR, QUANTLAB_DIR, IBKR_DIR, DATA_DIR, CPUS, the times
-# below, and DECIDE_FLAGS (e.g. "--dry-run": decide and print, submit nothing).
+# below, DECIDE_FLAGS (e.g. "--dry-run": decide and print, submit nothing),
+# MIRROR (the store predict_day.py mirrors from the price store; the S&P 500
+# strategy's prices.zarr by default) and PREPARE (a command run in
+# QUANTLAB_DIR after the vendor update and before the prediction job, for the
+# stores the job does not extend; the us3000 strategy's is
+# "examples/sharadar_us_equity/us3000_h1_mvo.py prepare-day").
 # `live_daily.sh morning|record` runs one step now.
 set -u
 
@@ -38,6 +43,8 @@ CONFIG=$LIVE_DIR/live.json
 RETRY_MINUTES=${RETRY_MINUTES:-15}
 MORNING_CUTOFF=${MORNING_CUTOFF:-08:30}
 DECIDE_AT=${DECIDE_AT:-08:35}
+MIRROR=${MIRROR:-$DATA_DIR/pipeline/sharadar_sp500/prices.zarr}
+PREPARE=${PREPARE:-}
 
 ny() { TZ=America/New_York date "$@"; }
 now_hm() { ny +%H:%M; }
@@ -76,10 +83,18 @@ update_sharadar() {
          --download-dir "$DATA_DIR/downloads" --zarr-dir "$DATA_DIR/zarrs")
 }
 
-# One round: update the vendor stores (status logged, not used), then the
-# prediction job, whose status is the round's.
+# The strategy's own stores the prediction job does not extend (PREPARE).
+prepare_stores() {
+    [ -n "$PREPARE" ] || return 0
+    # shellcheck disable=SC2086
+    (cd "$QUANTLAB_DIR" && QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" $PREPARE)
+}
+
+# One round: update the vendor stores (status logged, not used), prepare the
+# strategy's stores, then the prediction job, whose status is the round's.
 update_and_predict() {
     update_sharadar; log "sharadar update: exit $?"
+    prepare_stores || { local status=$?; log "prepare: exit $status"; return "$status"; }
     predict_day
 }
 
@@ -89,7 +104,7 @@ predict_day() {
     (cd "$QUANTLAB_DIR" &&
      QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" scripts/live/predict_day.py "$run_dir" \
          --store "$LIVE_DIR/live_predictions.zarr" \
-         --mirror "$DATA_DIR/pipeline/sharadar_sp500/prices.zarr" \
+         --mirror "$MIRROR" \
          --may-lag "$DATA_DIR/zarrs/fred_dtb3_1d.zarr")
 }
 
