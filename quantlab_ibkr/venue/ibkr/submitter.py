@@ -45,6 +45,10 @@ MAX_ORDERS_PER_SECOND = 40
 #: Reasons recorded for an order reported unfilled.
 DRY_RUN = "dry run: not submitted"
 PAST_DEADLINE = "not submitted: past the order deadline {deadline}"
+OUTSIDE_SESSION = "not submitted: outside the after-open window {start} to {end}"
+
+#: The after-open window (``after_open``): from the open to ten minutes before the close.
+SESSION_OPEN, AFTER_OPEN_CUTOFF = "09:30", "15:50"
 ENDED_UNFILLED = "{status} by IBKR: {reason}"
 
 
@@ -64,6 +68,24 @@ def parse_deadline(text: str) -> datetime.time:
         return datetime.datetime.strptime(text, "%H:%M").time()
     except (TypeError, ValueError):
         raise ValueError(f"order_deadline must be HH:MM in market time, got {text!r}") from None
+
+
+def after_open_window(decision_date: pd.Timestamp) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Return when orders of ``decision_date`` may go out as day market orders after the open.
+
+    ``SESSION_OPEN`` to ``AFTER_OPEN_CUTOFF`` market time on the weekday after
+    ``decision_date`` (an exchange holiday is not skipped, as for
+    ``order_deadline``).
+
+    Examples
+    --------
+    >>> after_open_window(pd.Timestamp("2026-10-08"))[0]
+    Timestamp('2026-10-09 09:30:00-0400', tz='America/New_York')
+    """
+    return (
+        order_deadline(decision_date, SESSION_OPEN),
+        order_deadline(decision_date, AFTER_OPEN_CUTOFF),
+    )
 
 
 def order_deadline(decision_date: pd.Timestamp, deadline: str = ORDER_DEADLINE) -> pd.Timestamp:
@@ -102,6 +124,11 @@ class IbkrOpenSubmitter(OpenSubmitter):
         ``(symbol, side) -> client order id`` of the orders already working
         at IBKR for the decision date; a decided order matching one is
         adopted instead of submitted.
+    after_open : bool, default False
+        The opening auction was missed: submit day market orders (``MKT`` /
+        ``DAY``) inside ``after_open_window`` instead of market-on-open
+        orders before the deadline. They fill at the market price when sent,
+        not at the open the backtest fills at.
 
     Attributes
     ----------
@@ -132,6 +159,7 @@ class IbkrOpenSubmitter(OpenSubmitter):
         dry_run: bool = False,
         max_orders_per_second: int = MAX_ORDERS_PER_SECOND,
         working: Mapping[tuple[Hashable, str], str] | None = None,
+        after_open: bool = False,
     ):
         parse_deadline(order_deadline)
         if max_orders_per_second < 1:
@@ -141,6 +169,7 @@ class IbkrOpenSubmitter(OpenSubmitter):
         self.resolver = resolver
         self.order_deadline = order_deadline
         self.dry_run = dry_run
+        self.after_open = after_open
         self.max_orders_per_second = max_orders_per_second
         self.decided: list[NextOpenOrder] = []
         self.submitted: list[NextOpenOrder] = []
@@ -208,16 +237,23 @@ class IbkrOpenSubmitter(OpenSubmitter):
     ) -> None:
         """Submit ``orders`` unless the deadline has passed; then mark ``released`` if ``last``."""
         strategy = self._strategy
-        deadline = order_deadline(decision_date, self.order_deadline)
         now = pd.Timestamp(strategy.clock.utc_now()).tz_convert(MARKET_TZ)
+        if self.after_open:
+            start, end = after_open_window(decision_date)
+            refused = None if start <= now < end else OUTSIDE_SESSION.format(start=start, end=end)
+            time_in_force = TimeInForce.DAY
+        else:
+            deadline = order_deadline(decision_date, self.order_deadline)
+            refused = PAST_DEADLINE.format(deadline=deadline) if now >= deadline else None
+            time_in_force = TimeInForce.AT_THE_OPEN
         for order in orders:
-            if now >= deadline:
-                self._report(order, PAST_DEADLINE.format(deadline=deadline))
+            if refused is not None:
+                self._report(order, refused)
                 continue
             instrument_id = self.resolver.instrument_id(order.permno, order.decision_date)
             self._by_instrument[instrument_id] = order
             self.submitted.append(order)
-            strategy.submit_next_open(order, TimeInForce.AT_THE_OPEN)
+            strategy.submit_next_open(order, time_in_force)
         if last:
             self.released = True
 

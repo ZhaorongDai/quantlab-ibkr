@@ -82,6 +82,10 @@ def _parser() -> argparse.ArgumentParser:
             "--force-decide", action="store_true", default=None,
             help="with --dry-run: decide t even off the rebalance cadence",
         )
+        command.add_argument(
+            "--after-open", action="store_true", default=None,
+            help="the opening auction was missed: day market orders 09:30-15:50 instead of MOO",
+        )
     return parser
 
 
@@ -177,6 +181,7 @@ _VENUE_FLAGS = {
     "order_deadline": "order_deadline",
     "dry_run": "dry_run",
     "force_decide": "force_decide",
+    "after_open": "after_open",
 }
 
 

@@ -77,6 +77,7 @@ from quantlab_ibkr.venue.ibkr.submitter import (
     MAX_ORDERS_PER_SECOND,
     ORDER_DEADLINE,
     IbkrOpenSubmitter,
+    after_open_window,
     order_deadline,
     parse_deadline,
 )
@@ -148,6 +149,11 @@ class IbkrVenueConfig(VenueConfig):
         (``IbapiOrderReports``); ``None`` is ``client_id + 2``.
     max_orders_per_second : int, default 40
         The submitter's pace.
+    after_open : bool, default False
+        The opening auction was missed: decide as usual, then submit day
+        market orders inside the after-open window (09:30 to 15:50 on the
+        session after t) instead of market-on-open orders before
+        ``order_deadline``; see ``IbkrOpenSubmitter``.
     timeout_secs : float, default 300
         How long a run waits for the node to connect, reconcile, decide and
         have the orders accepted before it stops anyway (``timed_out``). It
@@ -183,6 +189,7 @@ class IbkrVenueConfig(VenueConfig):
     reports_client_id: int | None = None
     max_orders_per_second: int = MAX_ORDERS_PER_SECOND
     timeout_secs: float = 300.0
+    after_open: bool = False
 
     def __post_init__(self):
         parse_deadline(self.order_deadline)
@@ -408,11 +415,16 @@ class IbkrVenue(Venue):
         )
         self.decision = self.clock.decision
         if self.decision.decides and not config.dry_run:
-            deadline = order_deadline(self.source.t, config.order_deadline)
             now = pd.Timestamp.now(tz="UTC") if now is None else pd.Timestamp(now)
+            if config.after_open:
+                deadline = after_open_window(self.source.t)[1]
+                what = "after-open window ending"
+            else:
+                deadline = order_deadline(self.source.t, config.order_deadline)
+                what = "order deadline"
             if now >= deadline:
                 raise OrderDeadlinePassed(
-                    f"refusing to decide {self.source.t.date()}: its order deadline "
+                    f"refusing to decide {self.source.t.date()}: its {what} "
                     f"{deadline} has passed"
                 )
         lookup = run.price_dataset.ticker_lookup() if ticker_lookup is None else ticker_lookup
@@ -436,6 +448,7 @@ class IbkrVenue(Venue):
             self.resolver,
             order_deadline=config.order_deadline,
             dry_run=config.dry_run,
+            after_open=config.after_open,
             max_orders_per_second=config.max_orders_per_second,
             working={
                 (symbol_of[order.con_id], order.side): order.order_ref

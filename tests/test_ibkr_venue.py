@@ -444,3 +444,36 @@ def test_a_forced_decision_runs_the_rule_on_a_bar_off_the_cadence():
     assert forced.targets(inputs, pd.Series(dtype=float)) == "decided" and calls == [t]
     held = LiveTargets(Rule(), LiveDecision(t, False, "not a rebalance bar"))
     assert held.targets(inputs, pd.Series(dtype=float)) is None and calls == [t]
+
+
+def test_after_open_orders_are_day_market_orders_inside_the_session():
+    # The auction was missed: same orders, MKT / DAY, between 09:30 and 15:50 after t.
+    submitter = IbkrOpenSubmitter(_resolver(), after_open=True)
+    _, _, commands, recorder = _strategy(
+        submitter, pd.Timestamp("2026-10-08 09:45", tz="America/New_York")
+    )
+    submitter.submit(_orders(), T)
+    assert [(c.order.side, c.order.order_type, c.order.time_in_force) for c in commands] == [
+        (OrderSide.SELL, OrderType.MARKET, TimeInForce.DAY),
+        (OrderSide.BUY, OrderType.MARKET, TimeInForce.DAY),
+        (OrderSide.BUY, OrderType.MARKET, TimeInForce.DAY),
+    ]
+    assert MAP_TIME_IN_FORCE[TimeInForce.DAY] == "DAY"
+    assert recorder.unfilled == []
+
+
+@pytest.mark.parametrize("when", ["2026-10-08 09:25", "2026-10-08 15:55", "2026-10-09 10:00"])
+def test_after_open_orders_never_leave_outside_the_session(when):
+    submitter = IbkrOpenSubmitter(_resolver(), after_open=True)
+    _, _, commands, recorder = _strategy(submitter, pd.Timestamp(when, tz="America/New_York"))
+    submitter.submit(_orders(), T)
+    assert commands == []
+    assert all("outside the after-open window" in r for _, r in recorder.unfilled)
+
+
+def test_an_after_open_day_starts_after_the_deadline_but_not_after_the_session(live_run):
+    t = live_run[2]
+    late = order_deadline(t) + pd.Timedelta(minutes=30)
+    assert _build(live_run, late, after_open=True).decision.decides
+    with pytest.raises(OrderDeadlinePassed, match="after-open window"):
+        _build(live_run, order_deadline(t, "15:51"), after_open=True)
