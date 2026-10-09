@@ -30,8 +30,8 @@
 #   ~/.config/quantlab/ibkr.env      TWS_ACCOUNT (the paper account, DU...)
 # Overrides: LIVE_DIR, QUANTLAB_DIR, IBKR_DIR, DATA_DIR, CPUS, the times
 # below, DECIDE_FLAGS (e.g. "--dry-run": decide and print, submit nothing),
-# and MIRROR (the store predict_day.py mirrors from the price store; the S&P 500
-# strategy's prices slice by default).
+# and MIRROR (a store predict_day.py mirrors from the price store; none by default:
+# a run reading the vendor store on its roster has no copy to mirror).
 # `live_daily.sh morning|record` runs one step now.
 set -u
 
@@ -49,7 +49,7 @@ MORNING_CUTOFF=${MORNING_CUTOFF:-09:25}
 DECIDE_AT=${DECIDE_AT:-07:15}
 LATE_AT=${LATE_AT:-09:00}
 AFTER_OPEN_AT=${AFTER_OPEN_AT:-09:31}
-MIRROR=${MIRROR:-$DATA_DIR/market/sharadar/sp500_prices/sp500_prices.zarr}
+MIRROR=${MIRROR:-}
 
 ny() { TZ=America/New_York date "$@"; }
 now_hm() { ny +%H:%M; }
@@ -114,7 +114,7 @@ predict_day() {
     (cd "$QUANTLAB_DIR" &&
      QUANTLAB_DATA_DIR=$DATA_DIR run "$PY" scripts/live/predict_day.py "$run_dir" \
          --store "$LIVE_DIR/live_predictions.zarr" \
-         --mirror "$MIRROR" \
+         ${MIRROR:+--mirror "$MIRROR"} \
          --may-lag "$DATA_DIR/market/fred/fred_dtb3_1d/fred_dtb3_1d.zarr")
 }
 
