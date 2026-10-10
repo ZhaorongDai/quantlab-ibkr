@@ -26,8 +26,14 @@
 # sent on stale data. Weekends are skipped; on a market holiday the decide
 # step finds t already decided and does nothing.
 #
+# The morning and the record step each end with an e-mail (in Chinese): the
+# outcome and the step's lines of the day's log, sent by quantlab's
+# scripts/notify/send_mail.py; a missing or failing mail setup never fails a step.
+#
 # Environment (files readable by the owner only):
 #   ~/.config/quantlab/ibkr.env      TWS_ACCOUNT (the paper account, DU...)
+#   ~/.config/quantlab/mail.env      QUANTLAB_SMTP_USER, QUANTLAB_SMTP_PASSWORD,
+#                                    QUANTLAB_MAIL_TO (see quantlab's send_mail.py)
 # Overrides: LIVE_DIR, QUANTLAB_DIR, IBKR_DIR, DATA_DIR, CPUS, the times
 # below, DECIDE_FLAGS (e.g. "--dry-run": decide and print, submit nothing),
 # and MIRROR (a store predict_day.py mirrors from the price store; none by default:
@@ -124,9 +130,42 @@ live() {
      cd "$IBKR_DIR" && QUANTLAB_DATA_DIR=$DATA_DIR run .venv/bin/quantlab-ibkr live "$step" "$CONFIG" "$@")
 }
 
+# E-mail a step's outcome: notify STEP STATUS FROM_LINE (the step's first log line).
+notify() {
+    local step=$1 status=$2 from=$3 outcome
+    case $step in
+        早盘)
+            case $status in
+                0) outcome="成功：已预测并下单${DECIDE_FLAGS:+（${DECIDE_FLAGS}，未真实下单）}" ;;
+                *) outcome="失败（exit ${status}）：当天可能未下单，请查看日志" ;;
+            esac ;;
+        *)
+            case $status in
+                0) outcome="成功：已记录成交并完成复核" ;;
+                *) outcome="失败（exit ${status}），请查看日志" ;;
+            esac ;;
+    esac
+    (load_env "$HOME/.config/quantlab/mail.env"
+     printf '策略：%s\n步骤：%s\n结果：%s\n时间：%s\n配置：%s\n' \
+         "$(basename "$LIVE_DIR")" "$step" "$outcome" "$(ny '+%F %T %Z')" "$CONFIG" |
+     "$PY" "$QUANTLAB_DIR/scripts/notify/send_mail.py" --body - \
+         --subject "【IBKR 模拟盘】$(basename "$LIVE_DIR") $(ny +%F) ${step}：${outcome%%：*}" \
+         --log "$log_file" --from-line "$from" --tail 80) >> "$log_file" 2>&1 || true
+}
+
+# Run a step (morning or record) and e-mail its outcome; 75 is "already running".
+run_step() {
+    local step=$1 name=$2 from status
+    from=1; [ -f "$log_file" ] && from=$(( $(wc -l < "$log_file") + 1 ))
+    "$step"; status=$?
+    [ "$status" -eq 75 ] && return 0
+    notify "$name" "$status" "$from"
+    return "$status"
+}
+
 morning() {
     exec 9> "$LIVE_DIR/.morning.lock"
-    flock -n 9 || { log "morning: already running"; return 0; }
+    flock -n 9 || { log "morning: already running"; return 75; }
     log "morning: begin"
     # predict_day.py: 0 appended, 3 already predicted, 2 data missing (retry).
     OK_CODES="0 3" retry_until_cutoff "data and prediction job" wait_and_predict || return 1
@@ -159,7 +198,7 @@ after_open() {
 
 record() {
     exec 9> "$LIVE_DIR/.record.lock"
-    flock -n 9 || { log "record: already running"; return 0; }
+    flock -n 9 || { log "record: already running"; return 75; }
     log "record: start"
     live record; local status=$?
     log "record: exit $status"
@@ -167,13 +206,13 @@ record() {
 }
 
 case "${1:-cron}" in
-    morning) morning ;;
-    record) record ;;
+    morning) run_step morning 早盘 ;;
+    record) run_step record 记录成交 ;;
     cron)
         [ "$(ny +%u)" -le 5 ] || exit 0
         case "$(ny +%H)" in
-            06) morning ;;
-            10) record ;;
+            06) run_step morning 早盘 ;;
+            10) run_step record 记录成交 ;;
         esac
         ;;
     *) echo "usage: $0 [cron|morning|record]" >&2; exit 2 ;;

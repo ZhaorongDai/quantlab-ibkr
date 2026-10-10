@@ -137,6 +137,9 @@ it every hour and the script checks the New York time itself (daylight saving ne
 - Weekends are skipped; on a market holiday decide finds t already decided and does nothing.
 - Credentials come from owner-only files: `~/.config/quantlab/sharadar.env` (`SHARADAR_API_KEY`)
   and `~/.config/quantlab/ibkr.env` (`TWS_ACCOUNT`). Logs go to `<live dir>/logs/<date>.log`.
+  The morning and the record step each end with an e-mail in Chinese (the outcome and the step's
+  log lines), sent by quantlab's `scripts/notify/send_mail.py` with the SMTP settings in
+  `~/.config/quantlab/mail.env` (see quantlab's `docs/data_update.md`); without them nothing is sent.
 - `scripts/live_daily.sh morning` or `record` runs one step now.
 
 ```
