@@ -35,12 +35,12 @@ EXTRA_BARS = 7
 PERIODS = 3
 
 
-def _run(root: Path):
+def _run(root: Path, benchmark=None):
     bars = pd.bdate_range("2024-01-02", periods=N_BARS)
     open_, close = _market(N_BARS, seed=1)
     run_dir, _ = build_constructor_run(
         root / "quantlab", bars, open_, close, _predictions(N_BARS, seed=2), _topn(), LABELS,
-        rebalance_periods=PERIODS,
+        rebalance_periods=PERIODS, benchmark=benchmark,
     )
     return run_dir
 

@@ -258,6 +258,7 @@ def build_constructor_run(
     fees: float = 0.001,
     slippage: float = 0.0,
     variables: Mapping[str, Mapping[int, Sequence[float]]] | None = None,
+    benchmark: tuple[Mapping[int, Sequence[float]], Mapping[int, Sequence[float]]] | None = None,
 ) -> tuple[Path, list[str]]:
     """Write a CRSP-shaped store and a closed-loop-ready quantlab run; return it.
 
@@ -265,7 +266,9 @@ def build_constructor_run(
     ``bars[first_bar]`` (the bars before it are the rule's warm-up).
     ``predictions`` gives each label's prediction per PERMNO over the
     window's bars. ``rule`` may be a function of the price dataset, for a
-    rule built on it (a factor risk model's stores). Returns the run
+    rule built on it (a factor risk model's stores). ``benchmark`` is the
+    raw ``(open, close)`` of one PERMNO over ``bars``, written to its own
+    store as the run's benchmark (``build_quantlab_run``'s). Returns the run
     directory and the ISO timestamps of the bars ``DecisionInputs.weights``
     held after a failure.
     """
@@ -299,6 +302,9 @@ def build_constructor_run(
             fees=fees,
             slippage=slippage,
             init_cash=init_cash,
+            benchmark_dataset=None
+            if benchmark is None
+            else _crsp_dataset(root / "benchmark", bars, *benchmark),
         )
     )
     # Keyed as quantlab's backtester keys the reads of run() (its components' paths).

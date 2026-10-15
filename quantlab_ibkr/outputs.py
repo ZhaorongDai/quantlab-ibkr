@@ -65,7 +65,6 @@ import numpy as np
 import pandas as pd
 import xarray as xr
 
-from quantlab.runs import backtest_stats
 from quantlab.runs.backtest_report import ReportExtras, write_backtest_report
 from quantlab_ibkr._support.jsonable import jsonable, python_scalar
 from quantlab_ibkr.base.config import TraderConfig
@@ -74,6 +73,7 @@ from quantlab_ibkr.decision import CycleResult
 from quantlab_ibkr.metrics import (
     CycleRecord,
     account_record,
+    bar_clock,
     benchmark_record,
     cut_folds,
     run_metrics,
@@ -667,14 +667,8 @@ class RunRecorder:
         """
         run = self.run
         timestamps = pd.DatetimeIndex(equity["timestamp"].values)
-        # quantlab's engine: the most common spacing of the window's bars.
-        bar_interval = (
-            pd.Series(np.diff(timestamps.values)).mode().iloc[0]
-            if len(timestamps) > 1
-            else pd.Timedelta(days=1)
-        )
-        year_freq = backtest_stats.year_freq(
-            bar_interval, run.trading_days_per_year, run.session_minutes_per_day
+        bar_interval, year_freq = bar_clock(
+            timestamps, run.trading_days_per_year, run.session_minutes_per_day
         )
         closes = (
             run.price_dataset.panel(timestamps[0], timestamps[-1])["close"]

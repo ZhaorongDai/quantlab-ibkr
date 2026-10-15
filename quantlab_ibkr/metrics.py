@@ -157,6 +157,34 @@ def decided_rebalances(cycles: Sequence[CycleRecord]) -> np.ndarray:
     )
 
 
+def bar_clock(
+    timestamps, trading_days_per_year: int, session_minutes_per_day: int
+) -> tuple[pd.Timedelta, pd.Timedelta]:
+    """Return a trader run's bar interval and year, as quantlab's statistics take them.
+
+    The bar interval is the most common spacing of the bars (quantlab's
+    engine takes it so), daily for one bar or none; the year is
+    ``backtest_stats.year_freq`` of it and the quantlab run's calendar.
+
+    Examples
+    --------
+    >>> bars = pd.DatetimeIndex(["2024-01-05", "2024-01-08", "2024-01-09", "2024-01-10"])
+    >>> bar_clock(bars, 252, 390)
+    (Timedelta('1 days 00:00:00'), Timedelta('252 days 00:00:00'))
+    >>> bar_clock(bars[:1], 252, 390)[0]
+    Timedelta('1 days 00:00:00')
+    """
+    timestamps = pd.DatetimeIndex(timestamps)
+    bar_interval = (
+        pd.Timedelta(pd.Series(np.diff(timestamps.values)).mode().iloc[0])
+        if len(timestamps) > 1
+        else pd.Timedelta(days=1)
+    )
+    return bar_interval, backtest_stats.year_freq(
+        bar_interval, trading_days_per_year, session_minutes_per_day
+    )
+
+
 def window_benchmark(returns: xr.DataArray, timestamps) -> xr.DataArray:
     """Return the benchmark's per-bar returns over the trader's bars, held from the first close.
 

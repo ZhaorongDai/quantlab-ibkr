@@ -211,11 +211,15 @@ class FakeVenue(IbkrVenue):
 
 
 class Day:
-    """The live setup: the run, its stores, the broker and the config."""
+    """The live setup: the run, its stores, the broker and the config.
 
-    def __init__(self, root: Path):
+    ``benchmark`` is the raw ``(open, close)`` of the run's benchmark, one
+    PERMNO over the run's bars (none by default).
+    """
+
+    def __init__(self, root: Path, benchmark=None):
         self.root = root
-        self.run_dir = _run(root)
+        self.run_dir = _run(root, benchmark)
         self.run = QuantlabRun.load(self.run_dir)
         self.bars = pd.bdate_range("2024-01-02", periods=N_BARS)
         self.open, self.close = _market(N_BARS, seed=1)

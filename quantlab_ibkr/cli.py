@@ -30,6 +30,12 @@ segments, oldest first, or that it has none. ``DIR`` is the directory the
 live configs keep the histories in, ``$QUANTLAB_DATA_DIR/live`` by default
 (refused when neither is given), beside the live run directories
 ``<root>/live/<strategy>/ibkr``.
+
+``quantlab-ibkr live brief [CONFIG.json] --no-send [--output DIR]`` builds the
+close briefing of the live run directory's last marked bar
+(``quantlab_ibkr.briefing``, #61) and writes its PNG, HTML and plain text to
+``DIR`` (printing the directory), or prints the text; sending it is not
+built yet, so ``--no-send`` is required.
 """
 
 from __future__ import annotations
@@ -101,6 +107,21 @@ def _parser() -> argparse.ArgumentParser:
     show.add_argument(
         "--history-dir", default=None,
         help="the directory holding the account histories (default: $QUANTLAB_DATA_DIR/live)",
+    )
+    brief = steps.add_parser(
+        "brief", help="after decide: the close briefing of the live run directory's last bar"
+    )
+    brief.add_argument("config", nargs="?", help="a TraderConfig JSON file (IBKR venue)")
+    brief.add_argument("--quantlab-run", help="the quantlab run directory (the recipe)")
+    brief.add_argument("--prediction-store", help="the run's live prediction store")
+    brief.add_argument("--live-dir", help="the live run directory")
+    brief.add_argument(
+        "--no-send", action="store_true", help="build the briefing without e-mailing it"
+    )
+    brief.add_argument("--output", default=None, help="write the PNG, HTML and text here")
+    # The venue's trading flags do not apply to a briefing; `_live_config` reads them as unset.
+    brief.set_defaults(
+        **{flag: None for flag in _VENUE_FLAGS if flag not in ("prediction_store", "live_dir")}
     )
     return parser
 
@@ -234,8 +255,12 @@ def _live(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     if args.step == "history":
         return _history(args)
+    if args.step == "brief" and not args.no_send:
+        parser.error("sending the close briefing is not built yet (#64): pass --no-send")
     try:
         config = _live_config(parser, args)
+        if args.step == "brief":
+            return _brief(config, args)
         if args.step == "decide":
             print(live.decide(config).summary())
             return 0
@@ -274,6 +299,19 @@ def _history(args: argparse.Namespace) -> int:
     except ValueError as error:
         print(f"quantlab-ibkr: {error}", file=sys.stderr)
         return 1
+    return 0
+
+
+def _brief(config: TraderConfig, args: argparse.Namespace) -> int:
+    """Run ``quantlab-ibkr live brief``; return the exit status."""
+    from quantlab_ibkr.briefing import close_briefing
+
+    brief = close_briefing(config)
+    if args.output is None:
+        print(brief.text, end="")
+    else:
+        brief.write(args.output)
+        print(args.output)
     return 0
 
 

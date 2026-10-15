@@ -29,7 +29,7 @@ inputs and the rebalance cadence are rebuilt from it, and each day's predictions
 the run's **live prediction store**, which quantlab's `scripts/live/predict_day.py` appends
 after the vendor update (quantlab `docs/live.md`). The trader process loads no model code.
 
-Each weekday has two steps, each a short run:
+Each weekday has two steps, each a short run; `recheck` and `brief` run on their own:
 
 - `quantlab-ibkr live decide CONFIG.json` (before the open). t is the last bar of the run's
   price store. It connects to the Gateway, reconciles the account (positions and cash are
@@ -48,6 +48,21 @@ Each weekday has two steps, each a short run:
   bar, and writes `decision_recheck.json`. Each decided bar is decided again from the live
   store's row, with the recorded current weights. The result must equal the decision bit for
   bit.
+- `quantlab-ibkr live brief CONFIG.json --no-send --output DIR` (after decide) builds the
+  **Close briefing** of the live run directory's last marked bar t (ADR 0012): the account as
+  of t's close, from the directory's own equity record. It writes `close_briefing.png` (the
+  cumulative return of the live curve and of the quantlab run's benchmark, rebased to the
+  first marked bar, with the live curve's drawdown beneath; its labels are English, so the
+  server needs no CJK font), `close_briefing.html` (the e-mail body, inline styles only, the
+  chart as `cid:close-briefing-chart`) and
+  `close_briefing.txt` (the plain-text alternative, the same figures). Without `--output` it
+  prints the text. The figures are in Chinese with English abbreviations: t's return, PnL,
+  the benchmark's return and the excess; the segment's total return, excess, volatility,
+  Sharpe, IR, maximum and current drawdown, computed by quantlab's `return_stats` and
+  `relative_stats` so they agree with `metrics.json`; annualised return and excess appear
+  from 60 bars on. It writes nothing into the live run directory, and a directory with no
+  marked bar is refused. Sending it by e-mail is not built yet, so `--no-send` is required.
+  In Python, `quantlab_ibkr.briefing.close_briefing(config)` returns the same briefing.
 
 - `quantlab-ibkr live history show ACCOUNT [--history-dir DIR]` prints the account's history
   (below): its strategy segments, oldest first, or that it has none. `DIR` defaults to
