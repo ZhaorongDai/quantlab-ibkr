@@ -9,7 +9,7 @@ description = "Event-driven backtesting and IBKR trading of quantlab strategies 
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "quantlab",
+    "quantlab[all]",
     "nautilus-trader>=1.231.0,<2",  # latest stable; 2.0 is still a release candidate
     # The IB adapter's client (the live venue, ADR 0010). Pinned as nautilus's
     # `ib` extra pins it, but not through that extra: it also pins
@@ -24,6 +24,7 @@ quantlab-ibkr = "quantlab_ibkr.cli:main"
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
+    "pytest-xdist>=3.8.0",
 ]
 
 [tool.uv.sources]
