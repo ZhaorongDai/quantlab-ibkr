@@ -33,13 +33,18 @@ live configs keep the histories in, ``$QUANTLAB_DATA_DIR/live`` by default
 LIVE_DIR... [--history-dir DIR]`` enters the segments the account ran before
 its history existed (``AccountHistory.init``) and prints it.
 
-``quantlab-ibkr live brief [CONFIG.json] --no-send [--output DIR]`` builds the
-close briefing of the live run directory's last marked bar
-(``quantlab_ibkr.briefing``, #61) and writes its PNG, HTML and plain text to
-``DIR`` (printing the directory), or prints the text; sending it is not
-built yet, so ``--no-send`` is required. It runs the closed-loop replay of
-the current strategy segment into ``<live_dir>/briefing/replay`` (#67) and
-prints the replay's wall time, or why it failed, to standard error.
+``quantlab-ibkr live brief [CONFIG.json] (--send-mail SCRIPT | --no-send)
+[--output DIR]`` builds the close briefing of the live run directory's last
+marked bar (``quantlab_ibkr.briefing``, #61). With ``--send-mail`` it writes
+the PNG, HTML and plain text to ``DIR`` (``<live_dir>/briefing/mail`` by
+default) and e-mails them through ``SCRIPT``, quantlab's
+``scripts/notify/send_mail.py`` (the text on standard input, ``--html`` and
+the chart as ``--image`` by its content id, #64), exiting 1 when the script
+fails; the mail settings are the script's environment. With ``--no-send`` it
+writes the files to ``DIR`` (printing the directory), or prints the text. It
+runs the closed-loop replay of the current strategy segment into
+``<live_dir>/briefing/replay`` (#67) and prints the replay's wall time, or
+why it failed, to standard error.
 """
 
 from __future__ import annotations
@@ -48,6 +53,7 @@ import argparse
 import dataclasses
 import json
 import os
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -130,6 +136,10 @@ def _parser() -> argparse.ArgumentParser:
     brief.add_argument("--live-dir", help="the live run directory")
     brief.add_argument(
         "--no-send", action="store_true", help="build the briefing without e-mailing it"
+    )
+    brief.add_argument(
+        "--send-mail", default=None, metavar="SCRIPT",
+        help="e-mail the briefing through quantlab's scripts/notify/send_mail.py",
     )
     brief.add_argument("--output", default=None, help="write the PNG, HTML and text here")
     # The venue's trading flags do not apply to a briefing; `_live_config` reads them as unset.
@@ -268,8 +278,8 @@ def _live(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
     if args.step == "history":
         return _history(args)
-    if args.step == "brief" and not args.no_send:
-        parser.error("sending the close briefing is not built yet (#64): pass --no-send")
+    if args.step == "brief" and args.no_send == (args.send_mail is not None):
+        parser.error("live brief needs exactly one of --send-mail SCRIPT and --no-send")
     try:
         config = _live_config(parser, args)
         if args.step == "brief":
@@ -327,11 +337,36 @@ def _brief(config: TraderConfig, args: argparse.Namespace) -> int:
         print(f"closed-loop replay: {brief.replay.seconds:.1f} s", file=sys.stderr)
     else:
         print(f"closed-loop replay failed: {brief.replay_failure}", file=sys.stderr)
+    if args.send_mail is not None:
+        return _send(config, brief, Path(args.send_mail), args.output)
     if args.output is None:
         print(brief.text, end="")
     else:
         brief.write(args.output)
         print(args.output)
+    return 0
+
+
+def _send(config: TraderConfig, brief, script: Path, output: str | None) -> int:
+    """E-mail ``brief`` through quantlab's ``send_mail.py``; return the exit status."""
+    from quantlab_ibkr.briefing import CHART_CID, FILES
+    from quantlab_ibkr.live import live_venue
+    from quantlab_ibkr.segment_replay import BRIEFING_DIR
+
+    directory = (
+        Path(output) if output else Path(live_venue(config).live_dir) / BRIEFING_DIR / "mail"
+    )
+    brief.write(directory)
+    png, page, _ = (directory / name for name in FILES)
+    sent = subprocess.run(
+        [sys.executable, str(script), "--subject", brief.subject, "--body", "-",
+         "--html", str(page), "--image", f"{CHART_CID}={png}"],
+        input=brief.text, text=True,
+    )
+    if sent.returncode != 0:
+        print(f"quantlab-ibkr: send_mail exited {sent.returncode}", file=sys.stderr)
+        return 1
+    print(f"sent: {brief.subject}")
     return 0
 
 

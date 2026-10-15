@@ -167,9 +167,43 @@ def test_live_brief_no_send_writes_the_three_files(day, capsys):
     assert text.read_text(encoding="utf-8") == brief.text
     assert str(out) in capsys.readouterr().out
 
-    with pytest.raises(SystemExit):  # sending is #64
+    with pytest.raises(SystemExit):  # neither --no-send nor --send-mail
         cli.main(["live", "brief", str(path)])
-    assert "--no-send" in capsys.readouterr().err
+    assert "--send-mail" in capsys.readouterr().err
+
+
+#: A stand-in for quantlab's scripts/notify/send_mail.py: records its arguments and stdin.
+FAKE_SEND_MAIL = """\
+import json, sys
+from pathlib import Path
+Path(sys.argv[0]).with_suffix(".json").write_text(json.dumps({"argv": sys.argv[1:], "stdin": sys.stdin.read()}))
+sys.exit(int(Path(sys.argv[0]).with_suffix(".status").read_text()))
+"""
+
+
+def test_live_brief_sends_the_html_the_chart_and_the_text_through_send_mail(day, tmp_path, capsys):
+    day.trade(range(FIRST, 8))
+    path = day.root / "live.json"
+    path.write_text(json.dumps(day.config.get_config()))
+    script = tmp_path / "send_mail.py"
+    script.write_text(FAKE_SEND_MAIL)
+    script.with_suffix(".status").write_text("0")
+
+    assert cli.main(["live", "brief", str(path), "--send-mail", str(script)]) == 0
+    sent = json.loads(script.with_suffix(".json").read_text())
+    brief = briefing.close_briefing(day.config)
+    mail_dir = day.live_dir / "briefing" / "mail"
+    png, page, text = (mail_dir / name for name in briefing.FILES)
+    argv = sent["argv"]
+    assert argv[argv.index("--subject") + 1] == brief.subject
+    assert argv[argv.index("--body") + 1] == "-" and sent["stdin"] == brief.text
+    assert argv[argv.index("--html") + 1] == str(page) and page.read_text(encoding="utf-8") == brief.html
+    assert argv[argv.index("--image") + 1] == f"{briefing.CHART_CID}={png}"
+    assert png.read_bytes().startswith(b"\x89PNG")
+
+    script.with_suffix(".status").write_text("1")  # send_mail.py failed to send
+    assert cli.main(["live", "brief", str(path), "--send-mail", str(script)]) == 1
+    assert "send_mail" in capsys.readouterr().err
 
 
 def test_the_benchmark_compounds_the_days_of_a_bar_never_decided(day):

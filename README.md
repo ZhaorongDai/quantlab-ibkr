@@ -48,7 +48,8 @@ Each weekday has two steps, each a short run; `recheck` and `brief` run on their
   bar, and writes `decision_recheck.json`. Each decided bar is decided again from the live
   store's row, with the recorded current weights. The result must equal the decision bit for
   bit.
-- `quantlab-ibkr live brief CONFIG.json --no-send --output DIR` (after decide) builds the
+- `quantlab-ibkr live brief CONFIG.json (--send-mail SCRIPT | --no-send) [--output DIR]` (after
+  decide) builds the
   **Close briefing** of the live run directory's last marked bar t (ADR 0012): the account as
   of t's close, from the directory's own equity record. It writes `close_briefing.png` (the
   cumulative return of the live curve and of the quantlab run's benchmark, rebased to the
@@ -84,8 +85,11 @@ Each weekday has two steps, each a short run; `recheck` and `brief` run on their
   result (`decision_recheck.json`). Securities are named by the price dataset's ticker lookup,
   by PERMNO when it has no ticker. It writes nothing into the live run directory's own files
   (only the replay below, under its `briefing/` subdirectory), and a directory with no marked
-  bar is refused. Sending it by e-mail is not built yet, so
-  `--no-send` is required.
+  bar is refused. `--send-mail SCRIPT` e-mails it through quantlab's
+  `scripts/notify/send_mail.py` (its SMTP settings in the environment): the files go to `DIR`
+  (`<live_dir>/briefing/mail` by default), the text is the plain part, the HTML the rich one
+  with the chart inline by its content id; the command exits 1 when the script fails.
+  `--no-send` writes the files to `DIR`, or prints the text.
   In Python, `quantlab_ibkr.briefing.close_briefing(config)` returns the same briefing.
 
   The briefing also draws a **Closed-loop replay** of the current strategy segment beside the
@@ -221,10 +225,16 @@ it every hour and the script checks the New York time itself (daylight saving ne
 0 * * * * $HOME/projects/quantlab-ibkr/scripts/live_daily.sh
 ```
 
-- 06:00 ET: Sharadar's `update.py --rebuild-dropped`, then quantlab's daily prediction job; the
-  pair is retried every 15 minutes until the job has t's row or 08:30 ET passes (a vendor table a
-  day late, such as SP500 membership, is waited for); from 08:35 ET, `live decide`. A morning
-  without t's row by 08:30 holds the day: no order is sent on stale data.
+- 06:00 ET: wait until quantlab's daily data update (its own cron) has written `done` for today
+  in `<DATA_DIR>/update_status.json`, then quantlab's daily prediction job, retried every 15
+  minutes until 09:25 ET; from 07:15 ET, `live decide` (market-on-open orders before the 09:20
+  deadline), and only if the opening auction is missed (09:00 reached, or decide refused for its
+  deadline), `live decide --after-open` from 09:31. A morning without t's prediction by 09:25
+  holds the day: no order is sent on stale data.
+- After a decide that recorded a new bar t (not a dry run, not a bar already recorded): the close
+  briefing of t, `live brief --send-mail <quantlab>/scripts/notify/send_mail.py` (ADR 0012), an
+  HTML e-mail with the account's chart. A briefing that fails is mailed as a plain notice with the
+  log's tail and never changes the morning step's outcome.
 - 10:00 ET: `live record` (IBKR's fills, then the Decision recheck).
 - Weekends are skipped; on a market holiday decide finds t already decided and does nothing.
 - Credentials come from owner-only files: `~/.config/quantlab/sharadar.env` (`SHARADAR_API_KEY`)
@@ -232,7 +242,7 @@ it every hour and the script checks the New York time itself (daylight saving ne
   The morning and the record step each end with an e-mail in Chinese (the outcome and the step's
   log lines), sent by quantlab's `scripts/notify/send_mail.py` with the SMTP settings in
   `~/.config/quantlab/mail.env` (see quantlab's `docs/data_update.md`); without them nothing is sent.
-- `scripts/live_daily.sh morning` or `record` runs one step now.
+- `scripts/live_daily.sh morning`, `record` or `brief` runs one step now.
 
 ```
 uv sync

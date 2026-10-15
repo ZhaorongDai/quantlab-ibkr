@@ -29,6 +29,11 @@
 # The morning and the record step each end with an e-mail (in Chinese): the
 # outcome and the step's lines of the day's log, sent by quantlab's
 # scripts/notify/send_mail.py; a missing or failing mail setup never fails a step.
+# A morning whose decide recorded a new bar t (not a dry run, not a bar already
+# recorded) is followed by the close briefing of t (ADR 0012, #64):
+# `quantlab-ibkr live brief --send-mail`, an HTML e-mail with the account's
+# chart; a briefing that fails is mailed as a plain notice with the log's tail,
+# and never changes the morning step's outcome.
 #
 # Environment (files readable by the owner only):
 #   ~/.config/quantlab/ibkr.env      TWS_ACCOUNT (the paper account, DU...)
@@ -38,7 +43,8 @@
 # below, DECIDE_FLAGS (e.g. "--dry-run": decide and print, submit nothing),
 # and MIRROR (a store predict_day.py mirrors from the price store; none by default:
 # a run reading the vendor store on its roster has no copy to mirror).
-# `live_daily.sh morning|record` runs one step now.
+# `live_daily.sh morning|record|brief` runs one step now (brief: the close
+# briefing of the live run directory's last marked bar).
 set -u
 
 DATA_DIR=${DATA_DIR:-/data/quantlab}
@@ -139,6 +145,8 @@ notify() {
                 0) outcome="成功：已预测并下单${DECIDE_FLAGS:+（${DECIDE_FLAGS}，未真实下单）}" ;;
                 *) outcome="失败（exit ${status}）：当天可能未下单，请查看日志" ;;
             esac ;;
+        收盘简报)
+            outcome="失败（exit ${status}）：收盘简报未发出，请查看日志" ;;
         *)
             case $status in
                 0) outcome="成功：已记录成交并完成复核" ;;
@@ -183,7 +191,31 @@ morning() {
         log "decide: refused for its order deadline"
         after_open; return $?
     fi
+    [ "$status" -eq 0 ] && recorded_since "$mark"
     return "$status"
+}
+
+# Whether the decide output since log line MARK recorded a new bar: its summary's
+# own line "recorded in <live_dir>" (DecideResult.summary; a dry run prints "nothing
+# recorded", a bar already recorded "<t> is already recorded in ..."). Sets BRIEF=1,
+# the cue for the close briefing.
+recorded_since() {
+    if tail -n +"$1" "$log_file" | grep -q '^recorded in /'; then
+        BRIEF=1
+    fi
+}
+
+# The close briefing of the bar decide just recorded (ADR 0012), e-mailed through
+# quantlab's send_mail.py; a failure is mailed as a plain notice, never the step's.
+brief() {
+    local from=1 status
+    [ -f "$log_file" ] && from=$(( $(wc -l < "$log_file") + 1 ))
+    log "brief: start"
+    (load_env "$HOME/.config/quantlab/mail.env"
+     live brief --send-mail "$QUANTLAB_DIR/scripts/notify/send_mail.py"); status=$?
+    log "brief: exit $status"
+    [ "$status" -eq 0 ] || notify 收盘简报 "$status" "$from"
+    return 0
 }
 
 # The opening auction was missed: decide with day market orders after the open.
@@ -191,8 +223,10 @@ after_open() {
     while [[ "$(now_hm)" < "$AFTER_OPEN_AT" ]]; do sleep 30; done
     log "decide --after-open: start ${DECIDE_FLAGS:-}"
     # shellcheck disable=SC2086
+    local mark; mark=$(wc -l < "$log_file")
     live decide --after-open ${DECIDE_FLAGS:-}; local status=$?
     log "decide --after-open: exit $status"
+    [ "$status" -eq 0 ] && recorded_since "$mark"
     return "$status"
 }
 
@@ -205,15 +239,24 @@ record() {
     return "$status"
 }
 
+# The morning step, then the close briefing when it recorded a new bar.
+morning_and_brief() {
+    BRIEF=0
+    run_step morning 早盘; local status=$?
+    [ "$BRIEF" -eq 1 ] && brief
+    return "$status"
+}
+
 case "${1:-cron}" in
-    morning) run_step morning 早盘 ;;
+    morning) morning_and_brief ;;
+    brief) brief ;;
     record) run_step record 记录成交 ;;
     cron)
         [ "$(ny +%u)" -le 5 ] || exit 0
         case "$(ny +%H)" in
-            06) run_step morning 早盘 ;;
+            06) morning_and_brief ;;
             10) run_step record 记录成交 ;;
         esac
         ;;
-    *) echo "usage: $0 [cron|morning|record]" >&2; exit 2 ;;
+    *) echo "usage: $0 [cron|morning|record|brief]" >&2; exit 2 ;;
 esac
