@@ -60,7 +60,16 @@ Each weekday has two steps, each a short run; `recheck` and `brief` run on their
   the benchmark's return and the excess; the segment's total return, excess, volatility,
   Sharpe, IR, maximum and current drawdown, computed by quantlab's `return_stats` and
   `relative_stats` so they agree with `metrics.json`; annualised return and excess appear
-  from 60 bars on. It writes nothing into the live run directory, and a directory with no
+  from 60 bars on. The chart and a second column of the same figures cover the whole
+  **Account history** (below) up to the directory's own segment: the account's returns are each
+  segment's equity-record returns over its own span (the first segment from its first marked
+  bar, each later one from its first decision date), concatenated in history order, with a later
+  segment's first return taken from its first mark over the previous segment's last so the
+  curve is continuous at a switch; the curve is rebased to the account's first marked bar, the
+  benchmark to the same bar, and each strategy switch is a dashed line labelled with the new
+  strategy. Without a history, or one that does not name the directory, the briefing shows the
+  single segment and says so; a segment whose equity record is missing is refused, naming its
+  directory. It writes nothing into the live run directory, and a directory with no
   marked bar is refused. Sending it by e-mail is not built yet, so `--no-send` is required.
   In Python, `quantlab_ibkr.briefing.close_briefing(config)` returns the same briefing.
 
