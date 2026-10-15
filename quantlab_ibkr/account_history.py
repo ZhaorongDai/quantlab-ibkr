@@ -22,7 +22,10 @@ the current, open segment). ``live.decide`` keeps the history current:
 
 A dry run never reads or writes it. Every write replaces the file
 atomically. The segments run before the history existed are entered once
-by ``live history init`` (#66), which writes its segments through the same
+by ``live history init`` (#66, ``AccountHistory.init``): each directory's
+segment begins on its first order's decision date (``orders.zarr`` holds only
+real orders) and, but for the last, ends on its last marked bar
+(``equity.zarr``) before the next segment begins, written through the same
 validation (``AccountHistory.write``).
 
 The file::
@@ -44,7 +47,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
+import xarray as xr
+
+from quantlab_ibkr.outputs import read_equity
 
 #: The account history file's layout version.
 FORMAT = 1
@@ -406,6 +413,84 @@ class AccountHistory:
             Path(staged).unlink(missing_ok=True)
             raise
 
+    def init(self, live_dirs: Sequence[str | Path]) -> tuple[StrategySegment, ...]:
+        """Write the segments ``live_dirs`` ran, in that order, into an account without a history.
+
+        Each directory's segment begins on the decision date of its first
+        submitted order, the bar ``decide`` would have begun it on: an order
+        recorded ``not submitted:`` (past the order deadline, outside the
+        after-open window) never reached IBKR, and a dry run records none.
+        Each but the last ends on the last bar it marked (``equity.zarr``)
+        before the next one began, the last stays open.
+
+        Parameters
+        ----------
+        live_dirs : sequence of str or pathlib.Path
+            The live run directories that traded the account, oldest first.
+
+        Returns
+        -------
+        tuple of StrategySegment
+            The segments written.
+
+        Raises
+        ------
+        ValueError
+            If the account already has a history; a directory submitted no
+            order, has no equity record, or marked no bar of its segment; the
+            next directory began on or before this one; this one has orders
+            decided after the next one began; or ``write`` refuses the segments.
+
+        Examples
+        --------
+        ::
+
+            history = AccountHistory("/data/quantlab/live", "DU1234567")
+            history.init(["/data/quantlab/live/a/ibkr", "/data/quantlab/live/b/ibkr"])
+            print(history.summary())
+
+        >>> import tempfile
+        >>> AccountHistory(tempfile.mkdtemp(), "DU1234567").init([])
+        Traceback (most recent call last):
+        ...
+        ValueError: live history init needs at least one live run directory
+        """
+        if not live_dirs:
+            raise ValueError("live history init needs at least one live run directory")
+        if self.segments:
+            raise ValueError(
+                f"account {self.account} already has a history ({self.path}); "
+                "live history init only enters the segments run before it existed"
+            )
+        traded = [_Traded.read(Path(d)) for d in live_dirs]
+        segments = []
+        for k, this in enumerate(traded):
+            first, last = this.orders.min(), None
+            if k + 1 < len(traded):
+                following = traded[k + 1]
+                begins = following.orders.min()
+                if begins <= first:
+                    raise ValueError(
+                        f"{following.live_dir} begins on {begins.date()}, not after "
+                        f"{this.live_dir} began on {first.date()}"
+                    )
+                if (this.orders > begins).any():
+                    raise ValueError(
+                        f"{this.live_dir} has orders decided on {this.orders.max().date()}, "
+                        f"after {following.live_dir} began on {begins.date()}"
+                    )
+                last = this.marked[this.marked < begins].max()
+            span = this.marked[this.marked >= first]
+            if last is not None:
+                span = span[span <= last]
+            if span.empty:
+                raise ValueError(
+                    f"{this.live_dir} marked no bar of its segment from {first.date()} on"
+                )
+            segments.append(StrategySegment(this.live_dir, strategy_of(this.live_dir), first, last))
+        self.write(segments)
+        return tuple(segments)
+
     def summary(self) -> str:
         """Return what ``live history show`` prints.
 
@@ -421,3 +506,36 @@ class AccountHistory:
         lines = [f"account history of {self.account}: {len(segments)} strategy segments"]
         lines += [s.summary() for s in segments]
         return "\n".join(lines)
+
+
+#: The reason prefix of an order recorded but never sent to IBKR
+#: (``venue.ibkr.submitter.PAST_DEADLINE``, ``OUTSIDE_SESSION``).
+NOT_SUBMITTED = "not submitted:"
+
+
+@dataclass(frozen=True)
+class _Traded:
+    """What ``init`` reads of a live run directory: its submitted orders' decision dates and marked bars."""
+
+    live_dir: str
+    orders: pd.DatetimeIndex
+    marked: pd.DatetimeIndex
+
+    @classmethod
+    def read(cls, live_dir: Path) -> _Traded:
+        try:
+            with xr.open_zarr(live_dir / "orders.zarr") as orders:
+                sent = np.array(
+                    [not str(reason).startswith(NOT_SUBMITTED) for reason in orders["reason"].values],
+                    dtype=bool,
+                )
+                decided = pd.DatetimeIndex(orders["decision_date"].values[sent])
+        except FileNotFoundError:
+            decided = pd.DatetimeIndex([])
+        if decided.empty:
+            raise ValueError(f"{live_dir} submitted no order: it never traded the account")
+        try:
+            marked = pd.DatetimeIndex(read_equity(live_dir)["timestamp"].values)
+        except FileNotFoundError:
+            raise ValueError(f"{live_dir} has no equity record") from None
+        return cls(str(live_dir.resolve()), decided, marked)

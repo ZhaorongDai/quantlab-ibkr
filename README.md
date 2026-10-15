@@ -106,6 +106,8 @@ Each weekday has two steps, each a short run; `recheck` and `brief` run on their
 - `quantlab-ibkr live history show ACCOUNT [--history-dir DIR]` prints the account's history
   (below): its strategy segments, oldest first, or that it has none. `DIR` defaults to
   `$QUANTLAB_DATA_DIR/live`; without either the command is refused.
+- `quantlab-ibkr live history init ACCOUNT LIVE_DIR... [--history-dir DIR]` enters, once, the
+  segments an account ran before its history existed, oldest first, and prints the history.
 
 The config is a `TraderConfig` JSON file whose venue is an `IbkrVenueConfig`. Flags given
 with the file override its venue fields: `--dry-run`, `--host`, `--port`, `--client-id`,
@@ -201,6 +203,15 @@ is written down. `decide` keeps it current:
 - The file is replaced atomically on every write.
 
 Switching strategies needs no step beyond changing the cron line to the new live config.
+
+The segments run before the history existed are entered once with `live history init`: each
+directory's segment begins on the decision date of its first order sent to IBKR (an order
+recorded `not submitted:`, past the deadline or outside the after-open window, is skipped, as
+`decide` begins nothing for it), and each but the last ends on its last marked bar before the
+next one began (`decide` ends it at the calendar bar before; both cut the same marked bars). It
+is refused for an account that already has a history, a directory that submitted no order or
+marked no bar of its segment, directories out of order, and a directory with orders decided
+after the next one began.
 
 `scripts/live_daily.sh` runs a live day on the server. Debian's cron has no `CRON_TZ`, so cron calls
 it every hour and the script checks the New York time itself (daylight saving needs no edit):

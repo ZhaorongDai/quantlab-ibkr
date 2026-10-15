@@ -10,17 +10,26 @@ on bars 6 and 9, a fake IBKR broker). Locked:
   the first at the previous bar;
 - the first directory deciding after that is refused before any order is
   sent, with nothing recorded in its live run directory;
-- ``live history show`` prints the segments, or says the account has none.
+- ``live history show`` prints the segments, or says the account has none;
+- ``live history init`` builds the same segments from the directories decide
+  wrote them from (each from its first submitted order, an order recorded
+  ``not submitted:`` skipped, ending at its last marked bar before the next
+  one's start), and refuses a directory that submitted no order or marked no
+  bar of its segment, a wrong order, overlapping segments and an account that
+  already has a history (#66).
 """
 
 import dataclasses
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from quantlab_ibkr import cli
-from quantlab_ibkr.account_history import AccountHistory, StrategySegment, TakenOver
+from quantlab_ibkr.account_history import NOT_SUBMITTED, AccountHistory, StrategySegment, TakenOver
+from quantlab_ibkr.venue.ibkr.submitter import OUTSIDE_SESSION, PAST_DEADLINE
 from tests.test_live_run import FIRST, Day
 
 ACCOUNT = "DU1234567"
@@ -48,6 +57,25 @@ def _dry(day: Day, dry: bool = True) -> None:
         day.config,
         venue=dataclasses.replace(day.config.venue, dry_run=dry, force_decide=dry),
     )
+
+
+def _traded(root: Path, name: str, orders: list[str], marked: list[str], reasons=None) -> Path:
+    """A live run directory holding orders on ``orders`` (with ``reasons``) and equity rows on ``marked``."""
+    live_dir = root / name / "ibkr"
+    live_dir.mkdir(parents=True)
+    if orders:
+        reasons = reasons or [""] * len(orders)
+        xr.Dataset({
+            "decision_date": ("order", pd.DatetimeIndex(orders).values),
+            "reason": ("order", np.array(reasons, dtype=object)),
+        }).to_zarr(live_dir / "orders.zarr")
+    bars = pd.DatetimeIndex(marked)
+    flat = np.full(len(bars), 1e6)
+    xr.Dataset(
+        {"value": ("timestamp", flat), "returns": ("timestamp", np.zeros(len(bars)))},
+        coords={"timestamp": bars.values},
+    ).to_zarr(live_dir / "equity.zarr")
+    return live_dir
 
 
 def test_the_history_lives_beside_the_live_run_directories(day):
@@ -168,3 +196,74 @@ def test_a_closed_segment_refuses_its_directory_and_a_foreign_file_is_refused(tm
     history.path.rename(AccountHistory(tmp_path, "DU7654321").path)
     with pytest.raises(ValueError, match="not a format-1 account history of DU7654321"):
         AccountHistory(tmp_path, "DU7654321").segments
+
+
+def test_live_history_init_rebuilds_the_segments_decide_wrote(day, tmp_path, capsys):
+    first_dir = day.live_dir
+    day.trade(range(FIRST, 9))
+    _switch(day, day.root / "next" / "run")
+    day.trade(range(9, 11))
+    written = _history(day).segments
+
+    rebuilt = AccountHistory(tmp_path / "rebuilt", ACCOUNT)
+    assert rebuilt.init([first_dir, day.live_dir]) == written
+    assert rebuilt.segments == written
+
+    again = tmp_path / "cli"
+    status = cli.main([
+        "live", "history", "init", ACCOUNT, str(first_dir), str(day.live_dir),
+        "--history-dir", str(again),
+    ])
+    assert status == 0
+    assert AccountHistory(again, ACCOUNT).segments == written
+    assert "2 strategy segments" in capsys.readouterr().out
+
+
+def test_live_history_init_takes_each_segment_from_its_first_order_to_its_last_mark(tmp_path):
+    # a's first order missed the deadline (never sent): its segment begins with
+    # the next day's, as decide would have begun it.
+    a = _traded(
+        tmp_path, "a", ["2026-10-07", "2026-10-08", "2026-10-09"],
+        ["2026-10-07", "2026-10-08", "2026-10-12"],
+        reasons=[PAST_DEADLINE.format(deadline="09:20"), "", ""],
+    )
+    b = _traded(tmp_path, "b", ["2026-10-14"], ["2026-10-14"])
+    segments = AccountHistory(tmp_path / "h", ACCOUNT).init([a, b])
+    assert [(s.strategy, s.first, s.last) for s in segments] == [
+        ("a", pd.Timestamp("2026-10-08"), pd.Timestamp("2026-10-12")),
+        ("b", pd.Timestamp("2026-10-14"), None),
+    ]
+
+
+def test_the_not_submitted_prefix_is_the_submitters():
+    for reason in (PAST_DEADLINE, OUTSIDE_SESSION):
+        assert reason.startswith(NOT_SUBMITTED)
+
+
+def test_live_history_init_refuses_inconsistent_directories(tmp_path):
+    a = _traded(tmp_path, "a", ["2026-10-08"], ["2026-10-08", "2026-10-09"])
+    b = _traded(tmp_path, "b", ["2026-10-14"], ["2026-10-14"])
+    never = _traded(tmp_path, "never", [], ["2026-10-08"])
+    unsent = _traded(
+        tmp_path, "unsent", ["2026-10-08"], ["2026-10-08"],
+        reasons=[OUTSIDE_SESSION.format(start="09:30", end="15:50")],
+    )
+    unmarked = _traded(tmp_path, "unmarked", ["2026-10-16"], ["2026-10-14"])
+    late = _traded(tmp_path, "late", ["2026-10-08", "2026-10-15"], ["2026-10-08"])
+    history = AccountHistory(tmp_path / "h", ACCOUNT)
+    for directory in (never, unsent):
+        with pytest.raises(ValueError, match="submitted no order"):
+            history.init([directory, b])
+    with pytest.raises(ValueError, match="marked no bar of its segment"):
+        history.init([a, unmarked])
+    with pytest.raises(ValueError, match="not after"):
+        history.init([b, a])
+    with pytest.raises(ValueError, match="after .* began"):
+        history.init([late, b])
+    assert not history.path.exists()
+    history.init([a, b])
+    with pytest.raises(ValueError, match="already has"):
+        history.init([a, b])
+    assert cli.main([
+        "live", "history", "init", ACCOUNT, str(a), str(b), "--history-dir", str(tmp_path / "h"),
+    ]) == 1

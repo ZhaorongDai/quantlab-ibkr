@@ -29,7 +29,9 @@ account's Account history (``quantlab_ibkr.account_history``): its strategy
 segments, oldest first, or that it has none. ``DIR`` is the directory the
 live configs keep the histories in, ``$QUANTLAB_DATA_DIR/live`` by default
 (refused when neither is given), beside the live run directories
-``<root>/live/<strategy>/ibkr``.
+``<root>/live/<strategy>/ibkr``. ``quantlab-ibkr live history init ACCOUNT
+LIVE_DIR... [--history-dir DIR]`` enters the segments the account ran before
+its history existed (``AccountHistory.init``) and prints it.
 
 ``quantlab-ibkr live brief [CONFIG.json] --no-send [--output DIR]`` builds the
 close briefing of the live run directory's last marked bar
@@ -105,11 +107,20 @@ def _parser() -> argparse.ArgumentParser:
     history = steps.add_parser("history", help="the account's strategy segments (ADR 0012)")
     actions = history.add_subparsers(dest="action", required=True)
     show = actions.add_parser("show", help="print an account's history")
-    show.add_argument("account", help="the IBKR account id")
-    show.add_argument(
-        "--history-dir", default=None,
-        help="the directory holding the account histories (default: $QUANTLAB_DATA_DIR/live)",
+    init = actions.add_parser(
+        "init", help="enter the segments an account ran before its history existed (#66)"
     )
+    for command in (show, init):
+        command.add_argument("account", help="the IBKR account id")
+    init.add_argument(
+        "live_dirs", nargs="+", metavar="LIVE_DIR",
+        help="the live run directories that traded the account, oldest first",
+    )
+    for command in (show, init):
+        command.add_argument(
+            "--history-dir", default=None,
+            help="the directory holding the account histories (default: $QUANTLAB_DATA_DIR/live)",
+        )
     brief = steps.add_parser(
         "brief", help="after decide: the close briefing of the live run directory's last bar"
     )
@@ -286,7 +297,7 @@ def _live(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
 
 
 def _history(args: argparse.Namespace) -> int:
-    """Run ``quantlab-ibkr live history show``; return the exit status."""
+    """Run ``quantlab-ibkr live history show`` or ``init``; return the exit status."""
     from quantlab_ibkr.account_history import AccountHistory
 
     directory = args.history_dir
@@ -297,7 +308,10 @@ def _history(args: argparse.Namespace) -> int:
             return 1
         directory = Path(root) / "live"
     try:
-        print(AccountHistory(directory, args.account).summary())
+        history = AccountHistory(directory, args.account)
+        if args.action == "init":
+            history.init(args.live_dirs)
+        print(history.summary())
     except ValueError as error:
         print(f"quantlab-ibkr: {error}", file=sys.stderr)
         return 1
