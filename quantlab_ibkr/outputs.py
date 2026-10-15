@@ -34,8 +34,8 @@
   ``quantity``, ``price``, ``fee``; never in ``orders.zarr``), cash bookings
   and logged factor days (``quantity`` held, ``amount`` of cash);
 - ``metrics.json``: quantlab's layout and names (``quantlab_ibkr.metrics``);
-- ``report.html``: quantlab's backtest report of the run, built with
-  quantlab's report-input builders.
+- ``report.html``: quantlab's backtest report of the run, drawn by quantlab's
+  ``write_backtest_report`` from the run's account record.
 
 The directory is written under a temporary name and renamed when complete, so
 a failed run leaves no half-written directory.
@@ -66,24 +66,17 @@ import pandas as pd
 import xarray as xr
 
 from quantlab.runs import backtest_stats
-from quantlab.runs.backtest_report import (
-    report_chart_inputs,
-    report_holdings_inputs,
-    report_portfolio_inputs,
-    report_summary,
-    report_windows,
-    write_backtest_report,
-)
+from quantlab.runs.backtest_report import ReportExtras, write_backtest_report
 from quantlab_ibkr._support.jsonable import jsonable, python_scalar
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.base.venue import MARKET_TZ, Loop, NextOpenOrder, VenueReport
 from quantlab_ibkr.decision import CycleResult
 from quantlab_ibkr.metrics import (
     CycleRecord,
+    account_record,
+    benchmark_record,
     cut_folds,
-    decided_rebalances,
     run_metrics,
-    window_benchmark,
 )
 from quantlab_ibkr.quantlab_run import QuantlabRun
 
@@ -659,17 +652,18 @@ class RunRecorder:
     ) -> None:
         """Compute the metrics, then write ``metrics.json`` and ``report.html``.
 
-        The page's inputs come from quantlab's builders, as a quantlab run's
-        do: ``report_summary`` (Setup: the quantlab run's config, ``Fees``
-        the venue's actual fee model, then the trader lines),
-        ``report_windows`` (the quantlab run's folds, cut to the trader's
-        bars), ``report_chart_inputs`` (the deepest drawdown, the benchmark)
-        ``report_portfolio_inputs`` of the decided targets and the actual
-        fills, and ``report_holdings_inputs`` of the actual holdings at each
-        close, named through the price dataset's ticker lookup;
-        ``execution.trader`` is the "Execution (event-driven)" table. The
-        attribution tabs are left off: trader simulates no cost-free or
-        risk-model counterfactual.
+        The page is quantlab's ``write_backtest_report`` of the run's account
+        record (``account_record``: the equity, the actual fills, the
+        rebalance record of the decision cycles and the actual holdings at
+        each close), its metrics with the quantlab run's trained checkpoint,
+        the decided targets, the quantlab run's recipe (the Setup lines), its
+        folds cut to the trader's bars and the window benchmark
+        (``benchmark_record``), as a quantlab run's is; the extras replace
+        ``Fees`` with the venue's actual fee model, add the trader's Setup
+        lines and the "Execution (event-driven)" table
+        (``execution.trader``), and name the holdings through the price
+        dataset's ticker lookup. The attribution sections are left off:
+        trader simulates no cost-free or risk-model counterfactual.
         """
         run = self.run
         timestamps = pd.DatetimeIndex(equity["timestamp"].values)
@@ -694,7 +688,7 @@ class RunRecorder:
         # record step runs before that bar closes) join the metrics with the
         # next day's equity row; a backtest's fills are all on its bars.
         fills = fills.isel(fill=fills["timestamp"].values <= timestamps[-1].to_datetime64())
-        self.metrics = run_metrics(
+        recorded = dict(
             equity=equity,
             fills=fills,
             orders=orders.assign(
@@ -706,6 +700,9 @@ class RunRecorder:
             init_cash=self.init_cash,
             bar_interval=bar_interval,
             year_freq=year_freq,
+        )
+        self.metrics = run_metrics(
+            **recorded,
             split=run.split(),
             benchmark=benchmark,
             closed_loop=self.config.loop is Loop.CLOSED,
@@ -719,64 +716,25 @@ class RunRecorder:
         block = dict(self.metrics)
         if records["trained_checkpoint"] is not None:
             block["trained_checkpoint"] = records["trained_checkpoint"]
-        span = backtest_stats.drawdown_span(equity["value"])
-        summary = report_summary(
-            records["recipe"],
-            block,
-            bar_interval=bar_interval,
-            drawdown_span=span,
-            benchmark_source=records["benchmark_source"],
-        )
-        summary["Fees"] = report.fees or "-"
-        summary.update(
-            {
-                "Quantlab run": str(run.run_dir),
-                "Loop": f"{self.config.loop.value} loop",
-                "Slippage": "-" if report.slippage is None else str(report.slippage),
-                "Init cash": f"{self.init_cash:,.2f}",
-            }
-        )
-        benchmark_curves = {}
-        if benchmark is not None:
-            returns = window_benchmark(benchmark["returns"], equity["timestamp"].values)
-            benchmark_curves = dict(
-                benchmark_returns=returns,
-                benchmark_value=self.init_cash * (1.0 + returns.fillna(0.0)).cumprod("timestamp"),
-            )
         write_backtest_report(
-            equity["value"],
+            account_record(**recorded, holdings=holdings["holding"]),
             directory / _REPORT_FILE,
             title=self.run_name,
-            summary=summary,
-            windows=report_windows(
-                timestamps.values, block, cut_folds(records["folds"], timestamps.values)
-            ),
-            metrics=self.metrics,
-            extra_tables={"Execution (event-driven)": _execution_table(self.metrics)},
-            **report_chart_inputs(
-                block,
-                list(NOTES),
-                returns=equity["returns"],
-                init_cash=self.init_cash,
-                drawdown_span=span,
-                **benchmark_curves,
-            ),
-            **report_portfolio_inputs(
-                decisions["weight"],
-                fills.rename(fill="order")
-                if fills.sizes.get("fill", 0)
-                else xr.Dataset({name: ("order", []) for name in ("timestamp", "size", "price")}),
-                equity["value"],
-                rebalances=decided_rebalances(self._cycles),
-                init_cash=self.init_cash,
-                bar_interval=bar_interval,
-                trading_days_per_year=run.trading_days_per_year,
-                session_minutes_per_day=run.session_minutes_per_day,
-            ),
-            **report_holdings_inputs(
-                holdings["holding"], decisions["weight"],
-                rebalances=decided_rebalances(self._cycles),
-                label=_symbol_names(run.price_dataset.ticker_lookup()),
+            metrics=block,
+            weights=decisions["weight"],
+            config=records["recipe"],
+            benchmark=benchmark_record(benchmark, timestamps.values, source=records["benchmark_source"]),
+            folds=cut_folds(records["folds"], timestamps.values),
+            extras=ReportExtras(
+                tables={"Execution (event-driven)": _execution_table(self.metrics)},
+                setup={
+                    "Fees": report.fees or "-",
+                    "Quantlab run": str(run.run_dir),
+                    "Loop": f"{self.config.loop.value} loop",
+                    "Slippage": "-" if report.slippage is None else str(report.slippage),
+                    "Init cash": f"{self.init_cash:,.2f}",
+                },
+                names=_symbol_names(run.price_dataset.ticker_lookup()),
             ),
         )
 

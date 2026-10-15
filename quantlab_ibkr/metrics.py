@@ -8,7 +8,10 @@ decision cycles, the rejected orders and the largest target deviation) and
 the whole rows quantlab's engine reads from its own portfolio, then hands
 both to quantlab's ``quantlab.runs.run_metrics.run_metrics``, the function
 that assembles a quantlab run's blocks, so the layout and the numbers are
-quantlab's by construction (quantlab ADR 0034):
+quantlab's by construction (quantlab ADR 0034). ``account_record`` and
+``benchmark_record`` return that record and the benchmark's, which
+quantlab's ``write_backtest_report`` draws the run's page from (quantlab
+ADR 0035):
 
 - ``whole``: quantlab's rows in quantlab's order (a vectorbt run's): the return statistics over the trader window, ``Start
   Value`` and ``End Value``, ``Max Gross Exposure [%]``, ``Total Fees Paid``,
@@ -222,6 +225,138 @@ def _orders(fills: xr.Dataset) -> xr.Dataset:
     )
 
 
+def _account(
+    equity: xr.Dataset,
+    fills: xr.Dataset,
+    orders: xr.Dataset,
+    cycles: Sequence[CycleRecord],
+    events: Sequence[Mapping],
+    closes: pd.DataFrame,
+    init_cash: float,
+    bar_interval,
+    year_freq: pd.Timedelta,
+    holdings: xr.DataArray | None,
+) -> tuple[AccountRecord, _Executed, xr.DataArray]:
+    """The run's account record, with the executions and the cash at each close it was built from."""
+    timestamps = equity["timestamp"].values
+    calendar = pd.DatetimeIndex(timestamps)
+    executed = _executions(fills, events, closes.reindex(calendar))
+    trips = backtest_stats.round_trips(
+        executed.fills, executed.close, cash_flows=executed.cash_flows
+    )
+    cash = xr.DataArray(
+        _cash(cycles),
+        dims="timestamp",
+        coords={"timestamp": [c.timestamp for c in cycles]},
+    ).reindex(timestamp=calendar)
+    account = AccountRecord(
+        value=equity["value"],
+        returns=equity["returns"],
+        orders=_orders(fills),
+        rebalances=rebalance_record(cycles, timestamps),
+        init_cash=float(init_cash),
+        bar_interval=pd.Timedelta(bar_interval),
+        year_freq=year_freq,
+        trades=trips,
+        rejected_orders=_rejected_orders(orders, calendar),
+        max_target_deviation=_max_target_deviation(
+            cycles, orders, closes, _settled(events), calendar
+        ),
+        holdings=holdings,
+    )
+    return account, executed, cash
+
+
+def account_record(
+    *,
+    equity: xr.Dataset,
+    fills: xr.Dataset,
+    orders: xr.Dataset,
+    cycles: Sequence[CycleRecord],
+    events: Sequence[Mapping],
+    closes: pd.DataFrame,
+    init_cash: float,
+    bar_interval,
+    year_freq: pd.Timedelta,
+    holdings: xr.DataArray | None = None,
+) -> AccountRecord:
+    """Return the trader run's account record, quantlab's ``AccountRecord``.
+
+    What ``run_metrics`` measures and quantlab's report draws (quantlab
+    ADR 0034, 0035): the equity's ``value`` and ``returns``, the next-open
+    fills as ``orders`` (with their ``fees``; a run without fills has none),
+    the round trips of the actual fills, the rebalance record of the
+    decision cycles (``rebalance_record``), the rejected orders, the
+    largest target deviation and ``holdings``. A delisting settlement is no
+    fill here, so the record lists none.
+
+    Parameters
+    ----------
+    equity, fills, orders, cycles, events, closes, init_cash, bar_interval, year_freq
+        As ``run_metrics`` takes them.
+    holdings : xarray.DataArray, optional
+        The actual holdings at each close on ``(timestamp, symbol)``, the
+        run's ``holdings.zarr`` ``holding``; the report's Holdings section.
+
+    Returns
+    -------
+    AccountRecord
+        The record.
+
+    Examples
+    --------
+    ``RunRecorder.write`` draws its report from it::
+
+        account = account_record(
+            equity=equity, fills=fills, orders=orders, cycles=cycles, events=events,
+            closes=closes, init_cash=1_000_000.0, bar_interval=pd.Timedelta("1D"),
+            year_freq=backtest_stats.year_freq("1D", 252, 390), holdings=holdings["holding"],
+        )
+        account.init_cash
+    """
+    return _account(
+        equity, fills, orders, cycles, events, closes, init_cash, bar_interval, year_freq, holdings
+    )[0]
+
+
+def benchmark_record(
+    benchmark: Mapping | None, timestamps, *, source: str | None = None
+) -> BenchmarkRecord | None:
+    """Return the benchmark on the trader's bars as quantlab's ``BenchmarkRecord``, or ``None``.
+
+    Its returns are ``window_benchmark`` of the quantlab run's (held from
+    the trader's first close); it has no simulated ``value``, so quantlab's
+    report draws it bought and held from the account's capital.
+
+    Parameters
+    ----------
+    benchmark : Mapping or None
+        ``QuantlabRun.benchmark()``: ``returns``, ``symbol``, ``axis_symbol``.
+    timestamps : array_like of datetime64
+        The trader run's bars.
+    source : str, optional
+        Where the quantlab run read it from, shown on the report's Setup lines.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-02", periods=3)
+    >>> returns = xr.DataArray([0.0, 0.01, 0.02], dims="timestamp", coords={"timestamp": bars})
+    >>> record = benchmark_record({"returns": returns, "symbol": "SPY", "axis_symbol": "84398"}, bars[1:])
+    >>> record.symbol, record.returns.values.tolist(), record.value is None
+    ('SPY', [0.0, 0.02], True)
+    >>> benchmark_record(None, bars) is None
+    True
+    """
+    if benchmark is None:
+        return None
+    return BenchmarkRecord(
+        window_benchmark(benchmark["returns"], timestamps),
+        symbol=benchmark.get("symbol"),
+        axis_symbol=benchmark.get("axis_symbol"),
+        source=source,
+    )
+
+
 def run_metrics(
     *,
     equity: xr.Dataset,
@@ -298,29 +433,10 @@ def run_metrics(
     timestamps = equity["timestamp"].values
     calendar = pd.DatetimeIndex(timestamps)
     whole_range = [(date_range.bar_label(timestamps[0]), date_range.bar_label(timestamps[-1]))]
-    executed = _executions(fills, events, closes.reindex(calendar))
-    trips = backtest_stats.round_trips(
-        executed.fills, executed.close, cash_flows=executed.cash_flows
+    account, executed, cash = _account(
+        equity, fills, orders, cycles, events, closes, init_cash, bar_interval, year_freq, None
     )
-    cash = xr.DataArray(
-        _cash(cycles),
-        dims="timestamp",
-        coords={"timestamp": [c.timestamp for c in cycles]},
-    ).reindex(timestamp=calendar)
-    account = AccountRecord(
-        value=equity["value"],
-        returns=equity["returns"],
-        orders=_orders(fills),
-        rebalances=rebalance_record(cycles, timestamps),
-        init_cash=float(init_cash),
-        bar_interval=pd.Timedelta(bar_interval),
-        year_freq=year_freq,
-        trades=trips,
-        rejected_orders=_rejected_orders(orders, calendar),
-        max_target_deviation=_max_target_deviation(
-            cycles, orders, closes, _settled(events), calendar
-        ),
-    )
+    trips = account.trades
 
     returns = backtest_stats.return_stats(
         account.returns, bar_interval=account.bar_interval, year_freq=year_freq, ranges=whole_range
@@ -344,13 +460,7 @@ def run_metrics(
         account,
         engine_rows=engine_rows,
         split=_cut_split(split, calendar),
-        benchmark=None
-        if benchmark is None
-        else BenchmarkRecord(
-            window_benchmark(benchmark["returns"], timestamps),
-            symbol=benchmark.get("symbol"),
-            axis_symbol=benchmark.get("axis_symbol"),
-        ),
+        benchmark=benchmark_record(benchmark, timestamps),
     )
     metrics["execution"]["settlements"] = _settlements(events, calendar)
     metrics["execution"]["trader"] = _trader_facts(fills, events, cycles)
@@ -408,7 +518,7 @@ def cut_folds(folds: Sequence[Mapping] | None, timestamps) -> list[dict] | None:
     Returns
     -------
     list of dict or None
-        The rows, as quantlab's ``report_windows`` takes them.
+        The rows, as quantlab's ``write_backtest_report`` takes its ``folds``.
 
     Examples
     --------

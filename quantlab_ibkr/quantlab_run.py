@@ -26,7 +26,6 @@ from quantlab.tracking.base import NullTracker, Tracker
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab.runs.backtest_run import BacktestRun, Market
 from quantlab.utils import date_range
-from quantlab.runs import backtest_stats
 
 #: The split keys of a quantlab run's metrics (``run()`` records the singular
 #: ``in_sample_range`` and ``training_window``, a ``run_cv()`` run the plural
@@ -272,9 +271,9 @@ class QuantlabRun:
         -------
         dict
             ``recipe``: the run's recipe, the config mapping quantlab's
-            ``report_summary`` reads; ``folds``: one row per fold of a
-            ``run_cv()`` run, in fold order, as quantlab's
-            ``report_windows`` takes them (``fold``, ``training_window``,
+            ``write_backtest_report`` reads for its Setup lines; ``folds``:
+            one row per fold of a ``run_cv()`` run, in fold order, as
+            quantlab's ``write_backtest_report`` takes them (``fold``, ``training_window``,
             ``traded``: the ``bar_label`` of the fold's first and last bar,
             ``in_sample_range``), else ``None``; ``trained_checkpoint``: the
             checkpoint a train-mode run trained, else ``None``;
@@ -287,7 +286,7 @@ class QuantlabRun:
         ::
 
             records = run.report_records()
-            windows = report_windows(timestamps, metrics, records["folds"])
+            folds = cut_folds(records["folds"], timestamps)
         """
         metrics = self.backtest_run.metrics()
         folds = None

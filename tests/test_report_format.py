@@ -3,11 +3,15 @@
 At the ``runner.run`` seam: the open-loop replay of a fixture quantlab run
 (``test_open_loop_replay``'s, hand-worked there) is compared with the
 quantlab run itself. quantlab's ``write_backtest_report`` is wrapped on both
-sides so the arguments each run hands the page can be compared where their
-meanings coincide.
+sides so the record each run hands the page (account record, metrics,
+weights, config, benchmark record, folds, extras) can be compared where
+their meanings coincide, and the two pages are compared where they draw the
+same thing (the Setup lines, the timeline, the benchmark curve).
 """
 
+import html as html_module
 import json
+import re
 
 import numpy as np
 import pandas as pd
@@ -32,9 +36,10 @@ def _capture(monkeypatch, module) -> list[dict]:
     calls: list[dict] = []
     original = module.write_backtest_report
 
-    def recording(value, path, **kwargs):
-        calls.append({"value": value, **kwargs})
-        return original(value, path, **kwargs)
+    def recording(account, path, **kwargs):
+        original(account, path, **kwargs)
+        # The page is written into a staging directory renamed afterwards.
+        calls.append({"account": account, "page": path.read_text(encoding="utf-8"), **kwargs})
 
     monkeypatch.setattr(module, "write_backtest_report", recording)
     return calls
@@ -61,6 +66,47 @@ def _metrics(run_dir) -> dict:
     return json.loads((run_dir / "metrics.json").read_text())
 
 
+def _page(call) -> str:
+    return call["page"]
+
+
+def _setup(page: str) -> dict[str, str]:
+    """The page's Setup table, label -> text, in page order."""
+    start = page.index("<h2>Setup</h2>")
+    block = page[start : page.index("</table>", start)]
+    rows = re.findall(r"<tr><th>(.*?)</th><td>(?:<div class=\"scroll\">)?(.*?)(?:</div>)?</td></tr>", block)
+    return {html_module.unescape(label): html_module.unescape(text) for label, text in rows}
+
+
+def _timeline(page: str) -> str:
+    """The page's windows timeline, caption to drawing."""
+    start = page.index("<h2>Windows</h2>")
+    return page[start : page.index("</svg>", start)]
+
+
+def _tooltips(page: str) -> list[str]:
+    return re.findall(r"<title>([^<]+)</title>", _timeline(page))
+
+
+def _traces(page: str) -> dict:
+    traces, pos = {}, 0
+    while (i := page.find("Plotly.newPlot(", pos)) >= 0:
+        batch, pos = json.JSONDecoder().raw_decode(page, page.index("[", i))
+        traces.update({trace["name"]: trace for trace in batch})
+    return traces
+
+
+def _y(trace) -> np.ndarray:
+    import plotly.io as pio
+
+    return np.asarray(pio.from_json(json.dumps({"data": [trace]})).data[0].y, dtype=float)
+
+
+def _holdings_data(page: str) -> dict:
+    found = re.search(r'<script type="application/json" id="holdings-data">(.*?)</script>', page, re.S)
+    return json.loads(found.group(1))
+
+
 def test_whole_has_quantlabs_rows_in_quantlabs_order(replay):
     quantlab = _metrics(replay["quantlab_run"])["whole"]
     trader = _metrics(replay["run_dir"])["whole"]
@@ -78,7 +124,7 @@ def test_max_gross_exposure_is_the_largest_book_over_its_value(replay):
 
 
 def test_setup_has_quantlabs_lines_then_the_trader_lines(replay):
-    quantlab, trader = replay["quantlab"]["summary"], replay["trader"]["summary"]
+    quantlab, trader = _setup(_page(replay["quantlab"])), _setup(_page(replay["trader"]))
 
     assert list(trader)[: len(quantlab)] == list(quantlab)
     assert list(trader)[len(quantlab):] == ["Quantlab run", "Loop", "Slippage", "Init cash"]
@@ -91,25 +137,35 @@ def test_setup_has_quantlabs_lines_then_the_trader_lines(replay):
 
 
 def test_timeline_equals_quantlabs(replay):
-    assert replay["trader"]["windows"] == replay["quantlab"]["windows"]
+    assert _timeline(_page(replay["trader"])) == _timeline(_page(replay["quantlab"]))
 
 
-def test_chart_inputs_name_and_draw_the_benchmark_as_quantlab_does(replay):
+def test_the_report_gets_quantlabs_record_and_draws_the_benchmark_as_quantlab_does(replay):
     quantlab, trader = replay["quantlab"], replay["trader"]
 
-    # trader simulates no cost-free or risk-model counterfactual, so it hands
-    # the page no attribution; quantlab hands its own as None without a model.
-    assert set(trader) - {"extra_tables"} == set(quantlab) - {"attribution", "factor_attribution"}
-    for name in ("in_sample_range", "init_cash", "benchmark_name", "bars_per_year"):
-        assert trader[name] == quantlab[name], name
+    # The trader hands its cut folds; quantlab reads its own from its metrics.
+    assert set(trader) - {"folds"} == set(quantlab) == {
+        "account", "page", "title", "metrics", "weights", "config", "benchmark", "extras",
+    }
+    # trader simulates no cost-free or risk-model counterfactual, so its
+    # extras hold no attribution; quantlab's are None without a model.
+    assert trader["extras"].attribution is None and trader["extras"].factor_attribution is None
+    assert trader["config"] == quantlab["config"]
+    assert trader["metrics"].get("in_sample_range") == quantlab["metrics"].get("in_sample_range")
+    assert trader["metrics"]["benchmark"]["symbol"] == quantlab["metrics"]["benchmark"]["symbol"]
+    for account in (trader["account"], quantlab["account"]):
+        assert account.year_freq / pd.Timedelta(account.bar_interval) == 252.0
+    assert trader["account"].init_cash == quantlab["account"].init_cash
+    assert trader["benchmark"].source == quantlab["benchmark"].source
     # The benchmark is the benchmark dataset's price return held from the
     # first close (no entry fee), read from the dataset so a live day past
     # the run's window has it; quantlab's own curve also charged the fee on
     # buying it, a constant factor 1 / (1 + fees) from the second bar on.
-    fees = replay["fees"] if "fees" in replay else 0.001
-    expected = quantlab["benchmark_value"].values.copy()
-    expected[1:] *= 1.0 + fees
-    np.testing.assert_allclose(trader["benchmark_value"].values, expected, rtol=1e-12)
+    assert trader["benchmark"].value is None
+    expected = quantlab["benchmark"].value.values.copy()
+    expected[1:] *= 1.0 + 0.001
+    drawn = _y(_traces(_page(trader))["benchmark_equity"])
+    np.testing.assert_allclose(drawn, expected, rtol=1e-12)
 
 
 def test_portfolio_tab_draws_the_decided_targets(replay):
@@ -119,7 +175,7 @@ def test_portfolio_tab_draws_the_decided_targets(replay):
 
 
 def test_holdings_tab_shows_the_actual_holdings_at_each_close(replay):
-    holdings = replay["trader"]["holdings"].transpose("timestamp", "symbol").to_pandas()
+    holdings = replay["trader"]["account"].holdings.transpose("timestamp", "symbol").to_pandas()
 
     # Bar 1: 500 * 11 and 250 * 21 over 10 439.70; bar 3 on: 508 of 10002.
     equity = [10_000.0, 10_439.70, 11_189.70, 11_730.87, 12_238.87, 12_746.87]
@@ -135,17 +191,17 @@ def test_holdings_tab_shows_the_actual_holdings_at_each_close(replay):
         holdings[[10001, 10002]], expected, check_names=False, check_freq=False, atol=1e-9
     )
     stored = xr.open_zarr(replay["run_dir"] / "holdings.zarr").load()["holding"]
-    np.testing.assert_allclose(stored.values, replay["trader"]["holdings"].values)
+    np.testing.assert_allclose(stored.values, replay["trader"]["account"].holdings.values)
     # The fixture's price dataset names no ticker lookup: each symbol is its id.
-    assert replay["trader"]["holding_names"]["10002"] == [("2024-01-03", "10002", "")]
-    turnover = replay["trader"]["turnover"]
+    page = _page(replay["trader"])
+    assert ["10002", "", "10002"] in _holdings_data(page)["names"]
     np.testing.assert_allclose(
-        turnover.values, [10_300 / 10_000, (6_200 + 5_830.8) / 11_189.70], rtol=1e-12
+        _y(_traces(page)["turnover"]), [10_300 / 10_000, (6_200 + 5_830.8) / 11_189.70], rtol=1e-12
     )
 
 
 def test_trader_only_execution_facts_are_their_own_table(replay):
-    table = replay["trader"]["extra_tables"]["Execution (event-driven)"]
+    table = replay["trader"]["extras"].tables["Execution (event-driven)"]
 
     assert table["Commissions"] == pytest.approx(22.33)
     assert table["Minimum-fee hits"] == 0
@@ -192,12 +248,18 @@ def test_timeline_has_the_run_cv_folds_cut_to_the_trader_window(tmp_path, monkey
     run(TraderConfig(quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(), loop="open",
                      output_dir=str(tmp_path / "trader"), start="2024-01-03"))
 
-    windows = calls[-1]["windows"]
-    assert windows["backtest"] == ("2024-01-03", "2024-01-09")
-    assert windows["in_sample"] == [["2024-01-05", "2024-01-05"]]
-    assert windows["folds"] == [
-        {"label": "fold 0", "training": ["2023-01-03", "2024-01-02"],
-         "traded": ("2024-01-03", "2024-01-04"), "in_sample": None},
-        {"label": "fold 1", "training": ["2023-01-03", "2024-01-05"],
-         "traded": ("2024-01-05", "2024-01-09"), "in_sample": ["2024-01-05", "2024-01-05"]},
+    assert calls[-1]["folds"] == [
+        {"fold": 0, "training_window": ["2023-01-03", "2024-01-02"],
+         "traded": ("2024-01-03", "2024-01-04"), "in_sample_range": None},
+        {"fold": 1, "training_window": ["2023-01-03", "2024-01-05"],
+         "traded": ("2024-01-05", "2024-01-09"), "in_sample_range": ["2024-01-05", "2024-01-05"]},
     ]
+    page = _page(calls[-1])
+    assert "2024-01-03 .. 2024-01-09" in _timeline(page)
+    tips = _tooltips(page)
+    assert [tip for tip in tips if tip.startswith("fold")] == [
+        "fold 0 training 2023-01-03 .. 2024-01-02", "fold 0 traded 2024-01-03 .. 2024-01-04",
+        "fold 1 training 2023-01-03 .. 2024-01-05", "fold 1 traded 2024-01-05 .. 2024-01-09",
+        "fold 1 in-sample 2024-01-05 .. 2024-01-05",
+    ]
+    assert [tip for tip in tips if tip.startswith("in-sample")] == ["in-sample 2024-01-05 .. 2024-01-05"]
