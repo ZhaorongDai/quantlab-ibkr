@@ -69,8 +69,20 @@ Each weekday has two steps, each a short run; `recheck` and `brief` run on their
   benchmark to the same bar, and each strategy switch is a dashed line labelled with the new
   strategy. Without a history, or one that does not name the directory, the briefing shows the
   single segment and says so; a segment whose equity record is missing is refused, naming its
-  directory. It writes nothing into the live run directory, and a directory with no
-  marked bar is refused. Sending it by e-mail is not built yet, so `--no-send` is required.
+  directory. The book follows: t's turnover (quantlab's
+  `backtest_stats.turnover` of the fills at t's open, as `metrics.json` sums it) and filled
+  orders; the turnover of t's own decision (`sum |weight - current_weight|`, filling at t+1's
+  open) and the orders decided on t; the holdings count and cash weight at t's close (`holdings.zarr`); the five largest holdings;
+  the five largest contributors and detractors of t's return (each security's change of value
+  over t plus the cash it moved on t: fills, fees and cash corporate actions, over the previous
+  bar's equity, which is the holding weight times its return on a bar without fills; a "cash
+  and other" row closes the sum to t's return); t's events from `events.json` (holds and their
+  reasons, rule events, unfilled orders on the open they missed, corporate actions, live
+  events), the orders the venue refused at t's submission and the Decision recheck's latest
+  result (`decision_recheck.json`). Securities are named by the price dataset's ticker lookup,
+  by PERMNO when it has no ticker. It writes nothing into the live run directory, and a
+  directory with no marked bar is refused. Sending it by e-mail is not built yet, so
+  `--no-send` is required.
   In Python, `quantlab_ibkr.briefing.close_briefing(config)` returns the same briefing.
 
 - `quantlab-ibkr live history show ACCOUNT [--history-dir DIR]` prints the account's history

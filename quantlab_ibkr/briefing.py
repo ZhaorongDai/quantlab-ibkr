@@ -18,6 +18,11 @@ The briefing carries:
   ``return_stats`` and ``relative_stats`` of the equity's returns and the
   benchmark's, so they agree with ``metrics.json``; the annualised return and
   excess only from ``ANNUALISED_FROM_BARS`` bars on;
+- ``book``: what the strategy did and holds on t (``BookFigures``, #68): t's
+  turnover, orders, holdings count and cash weight, the five largest
+  holdings, the five largest contributors and detractors of t's return, t's
+  events and the Decision recheck's latest result, securities named by the
+  price dataset's ticker lookup (the PERMNO when it has no ticker);
 - ``png``, ``html`` and ``text``: the chart (matplotlib's Agg canvas, two
   panels on one time axis), the e-mail's HTML body (inline styles only, the
   chart referenced by its content id ``CHART_CID``) and its plain-text
@@ -58,6 +63,7 @@ from __future__ import annotations
 
 import html as html_lib
 import io
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -68,6 +74,7 @@ import xarray as xr
 from quantlab.runs import backtest_stats
 from quantlab.runs.run_metrics import BenchmarkRecord
 from quantlab_ibkr.account_history import AccountHistory, StrategySegment
+from quantlab_ibkr._support.jsonable import python_scalar
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.metrics import bar_clock, benchmark_record
 from quantlab_ibkr.outputs import LiveRecorder, read_equity
@@ -84,6 +91,8 @@ SINGLE_SEGMENT_NOTE = "无账户历史 (account history) 记录本目录：仅�
 
 #: The titles of the segment's and the whole account's cumulative sections, shown side by side.
 SEGMENT_TITLE, ACCOUNT_TITLE = "当前策略段 (Strategy segment)", "整个账户 (Account)"
+#: How many holdings, contributors and detractors the book lists.
+TOP = 5
 
 #: The files ``CloseBriefing.write`` writes: the chart, the HTML body, the plain text.
 FILES = ("close_briefing.png", "close_briefing.html", "close_briefing.txt")
@@ -166,6 +175,110 @@ class SegmentFigures:
 
 
 @dataclass(frozen=True)
+class SecurityFigure:
+    """One security's figure in the book: a holding's weight or a contribution, in percent.
+
+    Attributes
+    ----------
+    symbol : Hashable
+        The security's id on the live run directory's ``symbol`` axis (a PERMNO).
+    ticker : str
+        Its ticker on t through the price dataset's ticker lookup, the
+        PERMNO itself (as ``str``) when the lookup has none.
+    pct : float
+        The weight or the contribution, in percent.
+
+    Examples
+    --------
+    >>> SecurityFigure(symbol=10001, ticker="AAA", pct=12.5).ticker
+    'AAA'
+    """
+
+    symbol: object
+    ticker: str
+    pct: float
+
+
+@dataclass(frozen=True)
+class BookFigures:
+    """What the strategy did and holds on decision date t (#68).
+
+    A security's contribution is its holding's change of value over t (the
+    previous marked bar's close to t's, at the raw closes the equity marks)
+    plus the cash it moved on t (next-open fills and their fees, a delisting
+    settlement, dividends and other cash corporate actions), over the
+    previous bar's equity: on a bar without fills or corporate actions, the
+    holding's weight times the security's return. What no security moved
+    (``cash_contribution_pct``) closes the sum to t's return.
+
+    Attributes
+    ----------
+    turnover_pct : float
+        quantlab's turnover of t's fills (``backtest_stats.turnover``, as
+        ``metrics.json`` sums it): the one-sided notional the previous
+        decision's next-open orders traded at t's open over the previous
+        bar's equity; 0 without fills.
+    filled_orders : int
+        The next-open orders that filled at t's open.
+    decided_turnover_pct : float or None
+        The same one-sided turnover of t's own decision, ``sum |weight -
+        current_weight|`` over its decided symbols (the trade sized at t's
+        close over t's equity, filling at t+1's open); ``None`` when t is
+        not a decided rebalance.
+    orders : int
+        The next-open orders decided on t (``orders.zarr``).
+    holdings : int
+        The securities held at t's close (``holdings.zarr``).
+    cash_weight_pct : float
+        Cash over equity at t's close, ``1 - sum(holding)``.
+    top_holdings : tuple of SecurityFigure
+        The ``TOP`` largest holdings by absolute weight, largest first.
+    contributors, detractors : tuple of SecurityFigure
+        The ``TOP`` largest positive and negative contributions, largest
+        first; empty on the first marked bar.
+    cash_contribution_pct : float or None
+        t's return less the securities' contributions; ``None`` on the
+        first marked bar.
+    events : tuple of dict
+        t's entries of ``events.json``, in its order: those dated t, and
+        the unfilled orders whose next marked bar after their decision
+        date is t (the open they missed).
+    refused_orders : tuple of dict
+        The orders decided on t the venue rejected or the risk engine
+        denied at submission (``orders.zarr`` rows: ``symbol``, ``side``,
+        ``quantity``, ``status``, ``reason``).
+    recheck : dict or None
+        The Decision recheck's latest result (``decision_recheck.json``),
+        ``None`` before any recheck ran.
+    tickers : dict
+        The ticker on t of every security the book names (its figures, its
+        events and refused orders), the PERMNO as ``str`` without one.
+
+    Examples
+    --------
+    ``close_briefing`` fills them::
+
+        book = close_briefing(config).book
+        [(f.ticker, f.pct) for f in book.top_holdings]
+    """
+
+    turnover_pct: float
+    filled_orders: int
+    decided_turnover_pct: float | None
+    orders: int
+    holdings: int
+    cash_weight_pct: float
+    top_holdings: tuple[SecurityFigure, ...]
+    contributors: tuple[SecurityFigure, ...]
+    detractors: tuple[SecurityFigure, ...]
+    cash_contribution_pct: float | None
+    events: tuple[dict, ...]
+    refused_orders: tuple[dict, ...]
+    recheck: dict | None
+    tickers: dict
+
+
+@dataclass(frozen=True)
 class CloseBriefing:
     """The close briefing of a live run directory as of decision date t.
 
@@ -199,6 +312,8 @@ class CloseBriefing:
         The e-mail's HTML body; the chart is ``<img src="cid:CHART_CID">``.
     text : str
         The plain-text alternative, with the same figures.
+    book : BookFigures
+        t's trades, holdings, contributors and events.
     account : SegmentFigures or None
         The whole account's figures across its strategy segments; ``None``
         when the briefing falls back to the single segment.
@@ -232,6 +347,7 @@ class CloseBriefing:
     png: bytes
     html: str
     text: str
+    book: BookFigures
     account: SegmentFigures | None = None
     account_curve: xr.Dataset | None = None
     segments: tuple[StrategySegment, ...] = ()
@@ -346,6 +462,8 @@ def close_briefing(config: TraderConfig) -> CloseBriefing:
         sections = _after_segment(
             sections, _account_section(symbol, account, len(segments), switches)
         )
+    book = _book(config, run, live_dir, equity)
+    sections = sections + _book_sections(book)
     subject = f"【IBKR 模拟盘】{name} {t.date()} 收盘简报"
     return CloseBriefing(
         t=t,
@@ -363,6 +481,7 @@ def close_briefing(config: TraderConfig) -> CloseBriefing:
         account_curve=account_curve,
         segments=segments,
         switches=switches,
+        book=book,
     )
 
 
@@ -649,3 +768,245 @@ def _text(subject: str, t: pd.Timestamp, sections) -> str:
     for title, rows in sections:
         lines += ["", title, *(f"  {label}: {text}" for label, text in rows)]
     return "\n".join(lines) + "\n"
+
+
+def _book(config: TraderConfig, run: QuantlabRun, live_dir: Path, equity: xr.Dataset) -> BookFigures:
+    """``BookFigures`` of the live run directory's last marked bar (the class docstring)."""
+    from quantlab_ibkr.live import RECHECK_FILE
+
+    timestamps = pd.DatetimeIndex(equity["timestamp"].values)
+    t = timestamps[-1]
+    previous = timestamps[-2] if len(timestamps) > 1 else None
+    holdings = _open(live_dir / "holdings.zarr")["holding"].transpose("timestamp", "symbol").to_pandas()
+    holdings.columns = [python_scalar(v) for v in holdings.columns]
+    held = holdings.loc[t].fillna(0.0)
+    held = held[held != 0.0]
+
+    decided_turnover = _decided_turnover(_open(live_dir / "decisions.zarr"), t)
+    orders = _open(live_dir / "orders.zarr")
+    on_t = pd.DatetimeIndex(orders["decision_date"].values) == t if orders.sizes.get("order") else []
+    refused = tuple(
+        {
+            "symbol": python_scalar(orders["symbol"].values[i]),
+            **{key: str(orders[key].values[i]) for key in ("side", "status", "reason")},
+            "quantity": int(orders["quantity"].values[i]),
+        }
+        for i in np.flatnonzero(on_t)
+        if str(orders["status"].values[i]) in ("rejected", "denied")
+    )
+
+    state = LiveRecorder(config, run).state()
+    filled = [f for f in state["fills"] if pd.Timestamp(f["timestamp"]) == t]
+    turnover = backtest_stats.turnover(
+        xr.Dataset({
+            "timestamp": ("order", np.array([t] * len(filled), dtype="datetime64[ns]")),
+            "size": ("order", np.array([f["size"] for f in filled], dtype=float)),
+            "price": ("order", np.array([f["price"] for f in filled], dtype=float)),
+        }),
+        equity["value"],
+        init_cash=float(state["init_cash"]),
+    )
+    events = tuple(e for e in state["events"] if _event_bar(e, timestamps) == t)
+
+    contributions: dict = {}
+    cash_contribution = None
+    if previous is not None:
+        contributions = _contributions(holdings, equity, state, previous, t)
+        r = float(equity["returns"].sel(timestamp=t)) * 100.0
+        cash_contribution = r - sum(contributions.values())
+
+    ranked = sorted(contributions.items(), key=lambda item: -item[1])
+    largest = held.reindex(held.abs().sort_values(ascending=False, kind="stable").index)
+    lists = {
+        "top_holdings": [(s, w * 100.0) for s, w in largest.items()][:TOP],
+        "contributors": [(s, v) for s, v in ranked if v > 0][:TOP],
+        "detractors": [(s, v) for s, v in reversed(ranked) if v < 0][:TOP],
+    }
+    named = [s for pairs in lists.values() for s, _ in pairs]
+    for record in (*events, *refused):
+        named += [record["symbol"]] if "symbol" in record else list(record.get("symbols", ()))
+    named = list(dict.fromkeys(named))
+    tickers = dict(zip(named, _tickers(run, named, t)))
+    recheck_path = live_dir / RECHECK_FILE
+    return BookFigures(
+        turnover_pct=float(turnover.values.sum() * 100.0),
+        filled_orders=len({f["order"] for f in filled}),
+        decided_turnover_pct=decided_turnover,
+        orders=int(np.count_nonzero(on_t)),
+        holdings=len(held),
+        cash_weight_pct=float((1.0 - held.sum()) * 100.0),
+        **{
+            name: tuple(SecurityFigure(s, tickers[s], float(v)) for s, v in pairs)
+            for name, pairs in lists.items()
+        },
+        cash_contribution_pct=cash_contribution,
+        events=events,
+        refused_orders=refused,
+        recheck=json.loads(recheck_path.read_text()) if recheck_path.is_file() else None,
+        tickers=tickers,
+    )
+
+
+def _decided_turnover(decisions: xr.Dataset, t: pd.Timestamp) -> float | None:
+    """The one-sided turnover of t's decision in percent; ``None`` when t decided nothing."""
+    if t not in pd.DatetimeIndex(decisions["timestamp"].values):
+        return None
+    row = decisions.sel(timestamp=t)
+    weight = np.asarray(row["weight"].values, dtype=float)
+    current = np.nan_to_num(np.asarray(row["current_weight"].values, dtype=float))
+    decided = np.isfinite(weight)  # NaN keeps the holding: no trade
+    return float(np.abs(weight[decided] - current[decided]).sum() * 100.0)
+
+
+def _contributions(
+    holdings: pd.DataFrame, equity: xr.Dataset, state: dict, previous: pd.Timestamp, t: pd.Timestamp
+) -> dict:
+    """Each security's contribution to t's return in percent (``BookFigures``), nonzero ones only.
+
+    Its holding's value at t's close less at the previous bar's, plus the
+    cash it moved after the previous close up to t: next-open fills (price
+    and fee), a delisting settlement, cash corporate actions; a split moves
+    no cash. Over the previous bar's equity.
+    """
+    start = float(equity["value"].sel(timestamp=previous))
+    end = float(equity["value"].sel(timestamp=t))
+    moved = (holdings.loc[t].fillna(0.0) * end - holdings.loc[previous].fillna(0.0) * start).to_dict()
+
+    def within(when) -> bool:
+        return previous < pd.Timestamp(when) <= t
+
+    for fill in state["fills"]:
+        if within(fill["timestamp"]):
+            cash = -fill["size"] * fill["price"] - fill["fee"]
+            moved[fill["symbol"]] = moved.get(fill["symbol"], 0.0) + cash
+    for event in state["events"]:
+        if event.get("type") != "corporate_action" or not within(event["timestamp"]):
+            continue
+        if event["action"] == "DELIST":
+            sign = 1 if event["side"] == "BUY" else -1
+            cash = -sign * event["quantity"] * event["price"] - event["fee"]
+        elif "side" in event:  # a split's venue fill: the share count changes, never the cash
+            continue
+        else:  # cash booked without a fill (CASH_ACTIONS); a logged factor day books 0
+            cash = float(event.get("amount", 0.0))
+        moved[event["symbol"]] = moved.get(event["symbol"], 0.0) + cash
+    return {s: v / start * 100.0 for s, v in moved.items() if v != 0.0}
+
+
+def _open(path: Path) -> xr.Dataset:
+    with xr.open_zarr(path) as dataset:
+        return dataset.load()
+
+
+def _tickers(run: QuantlabRun, symbols: list, t: pd.Timestamp) -> list[str]:
+    """The tickers of ``symbols`` on t through the price dataset's ticker lookup, else the PERMNOs."""
+    lookup = run.price_dataset.ticker_lookup() if symbols else None
+    if lookup is None:
+        return [str(s) for s in symbols]
+    return [name.ticker for name in lookup.names(symbols, t.date())]
+
+
+def _event_bar(event: dict, timestamps: pd.DatetimeIndex) -> pd.Timestamp | None:
+    """The marked bar an event belongs to: its date; an unfilled order's, the bar after its decision."""
+    if event.get("type") == "unfilled_order":
+        position = timestamps.searchsorted(pd.Timestamp(event["decision_date"]), side="right")
+        return timestamps[position] if position < len(timestamps) else None
+    when = event.get("timestamp")
+    return None if when is None else pd.Timestamp(when)
+
+
+#: The event types' labels in the e-mail.
+_EVENT_LABELS = {
+    "hold": "暂停调仓 (Hold)",
+    "live_hold": "暂停调仓 (Hold)",
+    "rule_event": "规则事件 (Rule event)",
+    "unfilled_order": "未成交订单 (Unfilled)",
+    "corporate_action": "公司行动 (Corporate action)",
+    "excluded_symbols": "排除标的 (Excluded)",
+    "position_gap": "持仓缺口 (Position gap)",
+    "adopted_orders": "接管订单 (Adopted orders)",
+    "timed_out": "超时 (Timed out)",
+}
+
+
+def _event_text(event: dict, name) -> str:
+    """One event as the e-mail shows it; ``name(symbol)`` is the security's ticker."""
+    kind = event.get("type")
+    if kind == "hold":
+        return str(event["failure"])
+    if kind == "live_hold":
+        return str(event["reason"])
+    if kind == "rule_event":
+        detail = event["count"] if "count" in event else ", ".join(name(s) for s in event["symbols"])
+        return f"{event['name']}: {detail}"
+    if kind == "unfilled_order":
+        return f"{event['side']} {event['quantity']} {name(event['symbol'])}: {event['reason']}"
+    if kind == "corporate_action":
+        if "side" in event:
+            detail = f"{event['side']} {event['quantity']} @ {event['price']:.2f}"
+        else:
+            detail = f"{event['quantity']} 股, 现金 {event['amount']:+,.2f} USD"
+        return f"{event['action']} {name(event['symbol'])}: {detail}"
+    if kind in ("excluded_symbols", "adopted_orders"):
+        symbols = ", ".join(name(s) for s in event["symbols"])
+        return f"{symbols}: {event['reason']}" if "reason" in event else symbols
+    if kind == "position_gap":
+        return f"{event['instrument_id']}: {event['reason']}"
+    if kind == "timed_out":
+        return "下单步骤超时 (the decide step timed out)"
+    return json.dumps({k: v for k, v in event.items() if k != "type"}, ensure_ascii=False)
+
+
+def _recheck_text(recheck: dict | None) -> str:
+    """The Decision recheck's latest result in one line."""
+    if recheck is None:
+        return "尚未运行 (not run yet)"
+    through = f"截至 {recheck['last_bar']}" if recheck.get("last_bar") else ""
+    if recheck["bars_differing"]:
+        bars = ", ".join(str(bar["timestamp"])[:10] for bar in recheck["differing_bars"])
+        return f"不一致 (differs): {recheck['bars_differing']}/{recheck['bars_checked']} 个调仓日 ({bars}) {through}".rstrip()
+    if not recheck["bars_checked"]:
+        return f"无新调仓日 (nothing new) {through}".rstrip()
+    return f"通过 (pass): 复核 {recheck['bars_checked']} 个调仓日, {through}".rstrip(", ")
+
+
+def _book_sections(book: BookFigures) -> tuple:
+    """The book's sections, as ``CloseBriefing.sections``: trades, holdings, contributors, events."""
+    def securities(figures, show):
+        return tuple((f.ticker, show(f.pct)) for f in figures)
+
+    decided = book.decided_turnover_pct
+    trades = (
+        ("成交换手 (Turnover)", _level(book.turnover_pct)),
+        ("成交订单 (Filled orders)", str(book.filled_orders)),
+        ("决策换手 (Decided turnover)", "未调仓 (no rebalance)" if decided is None else _level(decided)),
+        ("新订单 (Orders)", str(book.orders)),
+        ("持仓数 (Holdings)", str(book.holdings)),
+        ("现金权重 (Cash)", _level(book.cash_weight_pct)),
+    )
+    if book.cash_contribution_pct is not None:
+        trades += (("现金及其他贡献 (Cash & other)", _pct(book.cash_contribution_pct)),)
+    sections = [("持仓与交易 (Book)", trades)]
+    for title, figures, show in (
+        ("前五大持仓 (Top holdings)", book.top_holdings, _level),
+        ("贡献前五 (Top contributors)", book.contributors, _pct),
+        ("拖累前五 (Top detractors)", book.detractors, _pct),
+    ):
+        if figures:
+            sections.append((title, securities(figures, show)))
+    def name(symbol):
+        return book.tickers.get(symbol, str(symbol))
+
+    events = tuple(
+        (_EVENT_LABELS.get(event.get("type"), str(event.get("type"))), _event_text(event, name))
+        for event in book.events
+    ) + tuple(
+        ("被拒订单 (Rejected)", f"{o['side']} {o['quantity']} {name(o['symbol'])}: {o['reason']}")
+        for o in book.refused_orders
+    )
+    sections.append(
+        ("事件 (Events)", (events or (("无事件 (No events)", "-"),)) + (
+            ("决策复核 (Decision recheck)", _recheck_text(book.recheck)),
+        ))
+    )
+    return tuple(sections)
