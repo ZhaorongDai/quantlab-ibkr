@@ -65,6 +65,7 @@ ALLOWED = {
     "quantlab.tracking.base",
     "quantlab.runs.backtest_report",
     "quantlab.runs.backtest_stats",
+    "quantlab.runs.run_metrics",
     "quantlab.utils.date_range",
     "quantlab.runs.record",
     "quantlab.runs.live_predictions",

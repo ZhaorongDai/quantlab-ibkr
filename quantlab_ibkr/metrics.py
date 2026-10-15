@@ -2,8 +2,13 @@
 
 ``run_metrics`` turns what a trader run recorded (equity, fills, orders,
 decisions and events) into the blocks a quantlab run's ``metrics.json``
-has, computed by quantlab's own public statistics
-(``quantlab.runs.backtest_stats``) so the numbers are comparable:
+has. It builds the run's account record (quantlab's ``AccountRecord``: the
+equity, the next-open fills, the round trips, the rebalance record of the
+decision cycles, the rejected orders and the largest target deviation) and
+the whole rows quantlab's engine reads from its own portfolio, then hands
+both to quantlab's ``quantlab.runs.run_metrics.run_metrics``, the function
+that assembles a quantlab run's blocks, so the layout and the numbers are
+quantlab's by construction (quantlab ADR 0034):
 
 - ``whole``: quantlab's rows in quantlab's order (a vectorbt run's): the return statistics over the trader window, ``Start
   Value`` and ``End Value``, ``Max Gross Exposure [%]``, ``Total Fees Paid``,
@@ -26,11 +31,12 @@ has, computed by quantlab's own public statistics
   commissions, minimum-fee hits, dividends, cash in lieu, value
   distributions, splits, implied splits (#27), factor mismatches (#28) and
   the peak cash debit;
-- ``portfolio_construction`` (closed loop): the held bars and the rule's
-  events, as quantlab's cross-section backtester records them;
 - ``benchmark`` / ``relative``: against the quantlab run's benchmark curve
   on the trader's bars, when the run had one;
-- the quantlab run's split keys, cut to the trader window, and ``notes``.
+- the quantlab run's split keys, cut to the trader window;
+- ``portfolio_construction`` (closed loop): the held bars and the rule's
+  events, as quantlab's cross-section backtester records them, and
+  ``notes``.
 
 ``max_target_deviation`` is quantlab's valuation-basis definition, because
 trader sizes against t's close: the largest ``|w - held weight|`` over every
@@ -69,6 +75,8 @@ import xarray as xr
 
 from quantlab.utils import date_range
 from quantlab.runs import backtest_stats
+from quantlab.runs.run_metrics import AccountRecord, BenchmarkRecord
+from quantlab.runs.run_metrics import run_metrics as quantlab_run_metrics
 from quantlab_ibkr._support.jsonable import python_scalar
 
 #: Order statuses of a next-open order that ended without a fill.
@@ -169,6 +177,50 @@ def window_benchmark(returns: xr.DataArray, timestamps) -> xr.DataArray:
     window[0] = 0.0
     return window
 
+def rebalance_record(cycles: Sequence[CycleRecord], timestamps) -> xr.Dataset:
+    """Return the run's rebalance record on ``timestamps``: quantlab's ``scheduled`` and ``decided``.
+
+    A cycle is scheduled when it was a rebalance bar (``weights`` is not
+    ``None``) and decided when it returned a finite target
+    (``decided_rebalances``); a cycle off ``timestamps`` is left out.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-02", periods=3)
+    >>> cycles = [
+    ...     CycleRecord(bars[0], pd.Series({10001: 1.0}), pd.Series(dtype=float), 1e4),
+    ...     CycleRecord(bars[1], None, pd.Series({10001: 1.0}), 1e4),
+    ...     CycleRecord(bars[2], pd.Series({10001: float("nan")}), pd.Series({10001: 1.0}), 1e4),
+    ... ]
+    >>> record = rebalance_record(cycles, bars.values)
+    >>> record["scheduled"].values.tolist(), record["decided"].values.tolist()
+    ([True, False, True], [True, False, False])
+    """
+    calendar = pd.DatetimeIndex(timestamps)
+    scheduled = calendar.isin(
+        pd.DatetimeIndex([pd.Timestamp(c.timestamp) for c in cycles if c.weights is not None])
+    )
+    decided = calendar.isin(pd.DatetimeIndex(decided_rebalances(cycles)))
+    return xr.Dataset(
+        {"scheduled": ("timestamp", scheduled), "decided": ("timestamp", decided)},
+        coords={"timestamp": calendar.values},
+    )
+
+
+def _orders(fills: xr.Dataset) -> xr.Dataset:
+    """The next-open fills as quantlab's account record takes them: on ``order``, with ``fees``."""
+    if not fills.sizes.get("fill", 0):
+        return xr.Dataset()
+    return xr.Dataset(
+        {
+            "timestamp": ("order", fills["timestamp"].values),
+            "symbol": ("order", fills["symbol"].values),
+            "size": ("order", fills["size"].values),
+            "price": ("order", fills["price"].values),
+            "fees": ("order", fills["fee"].values),
+        }
+    )
+
 
 def run_metrics(
     *,
@@ -243,7 +295,6 @@ def run_metrics(
         )
         metrics["whole"]["Total Return [%]"]
     """
-    stats = _Stats(equity, fills, init_cash, bar_interval, year_freq, decided_rebalances(cycles))
     timestamps = equity["timestamp"].values
     calendar = pd.DatetimeIndex(timestamps)
     whole_range = [(date_range.bar_label(timestamps[0]), date_range.bar_label(timestamps[-1]))]
@@ -256,16 +307,31 @@ def run_metrics(
         dims="timestamp",
         coords={"timestamp": [c.timestamp for c in cycles]},
     ).reindex(timestamp=calendar)
+    account = AccountRecord(
+        value=equity["value"],
+        returns=equity["returns"],
+        orders=_orders(fills),
+        rebalances=rebalance_record(cycles, timestamps),
+        init_cash=float(init_cash),
+        bar_interval=pd.Timedelta(bar_interval),
+        year_freq=year_freq,
+        trades=trips,
+        rejected_orders=_rejected_orders(orders, calendar),
+        max_target_deviation=_max_target_deviation(
+            cycles, orders, closes, _settled(events), calendar
+        ),
+    )
 
-    returns = stats.returns(whole_range)
-    records = stats.records(whole_range)
-    whole = {
+    returns = backtest_stats.return_stats(
+        account.returns, bar_interval=account.bar_interval, year_freq=year_freq, ranges=whole_range
+    )
+    engine_rows = {
         **{name: returns[name] for name in ("Start", "End", "Period")},
         "Start Value": float(init_cash),
         "End Value": float(equity["value"].values[-1]),
         "Total Return [%]": returns["Total Return [%]"],
         **backtest_stats.exposure_stats(executed.fills, executed.close, cash),
-        "Total Fees Paid": records["Total Fees Paid"],
+        "Total Fees Paid": float(fills["fee"].values.sum()) if fills.sizes.get("fill", 0) else 0.0,
         "Max Drawdown [%]": returns["Max Drawdown [%]"],
         "Max Drawdown Duration": returns["Max Drawdown Duration"],
         **backtest_stats.round_trip_stats(trips, bar_interval=bar_interval),
@@ -273,142 +339,25 @@ def run_metrics(
             name: returns[name]
             for name in ("Sharpe Ratio", "Calmar Ratio", "Omega Ratio", "Sortino Ratio")
         },
-        **stats.turnover_rows(whole_range),
-        "Total Orders": records["Total Orders"],
-        **stats.win_rates(whole_range),
     }
-    settlements = _settlements(events, calendar)
-    metrics: dict = {
-        "whole": whole,
-        "execution": {
-            **_rejected_orders(orders, calendar),
-            "max_target_deviation": _max_target_deviation(
-                cycles, orders, closes, _settled(events), calendar
-            ),
-            "settlements": settlements,
-            "trader": _trader_facts(fills, events, cycles),
-        },
-    }
-
-    cut = _cut_split(split, calendar)
-    slices: dict[str, list] = {}
-    if "out_of_sample_ranges" in cut:
-        in_sample = cut.get("in_sample_ranges")
-        if in_sample is None:
-            in_sample = [cut["in_sample_range"]] if cut.get("in_sample_range") else []
-        slices = {"in_sample": in_sample, "out_of_sample": cut["out_of_sample_ranges"]}
-    for name, ranges in slices.items():
-        metrics[name] = (
-            {
-                **stats.returns(ranges),
-                **stats.records(ranges),
-                **_trade_counts(trips, ranges),
-                **stats.turnover_rows(ranges),
-                **stats.win_rates(ranges),
-            }
-            if ranges
-            else None
-        )
-
-    if benchmark is not None:
-        bench = window_benchmark(benchmark["returns"], timestamps)
-        metrics["benchmark"] = {
-            "symbol": benchmark.get("symbol"),
-            "axis_symbol": benchmark.get("axis_symbol"),
-            **{
-                name: stats.benchmark_returns(bench, ranges) if ranges else None
-                for name, ranges in {"whole": whole_range, **slices}.items()
-            },
-        }
-        metrics["relative"] = {
-            name: stats.relative(bench, ranges) if ranges else None
-            for name, ranges in {"whole": whole_range, **slices}.items()
-        }
+    metrics = quantlab_run_metrics(
+        account,
+        engine_rows=engine_rows,
+        split=_cut_split(split, calendar),
+        benchmark=None
+        if benchmark is None
+        else BenchmarkRecord(
+            window_benchmark(benchmark["returns"], timestamps),
+            symbol=benchmark.get("symbol"),
+            axis_symbol=benchmark.get("axis_symbol"),
+        ),
+    )
+    metrics["execution"]["settlements"] = _settlements(events, calendar)
+    metrics["execution"]["trader"] = _trader_facts(fills, events, cycles)
     if closed_loop:
         metrics["portfolio_construction"] = _portfolio_construction(events)
-    metrics.update(cut)
     metrics["notes"] = list(notes)
     return metrics
-
-
-class _Stats:
-    """quantlab's statistics of one run, bound to its series and conventions."""
-
-    def __init__(self, equity, fills, init_cash, bar_interval, year_freq, rebalances):
-        self.value = equity["value"]
-        self.returns_series = equity["returns"]
-        self.fills = fills
-        self.bar_interval = pd.Timedelta(bar_interval)
-        self.year_freq = year_freq
-        self.rebalances = rebalances
-        self.turnover = backtest_stats.turnover(
-            xr.Dataset(
-                {name: ("order", fills[name].values) for name in ("timestamp", "size", "price")}
-            )
-            if fills.sizes.get("fill", 0)
-            else xr.Dataset(),
-            self.value,
-            init_cash,
-        )
-
-    def returns(self, ranges) -> dict:
-        return backtest_stats.return_stats(
-            self.returns_series,
-            bar_interval=self.bar_interval,
-            year_freq=self.year_freq,
-            ranges=ranges,
-        )
-
-    def benchmark_returns(self, bench, ranges) -> dict:
-        return backtest_stats.return_stats(
-            bench, bar_interval=self.bar_interval, year_freq=self.year_freq, ranges=ranges
-        )
-
-    def records(self, ranges) -> dict:
-        """``Total Orders``, ``Total Fees Paid`` and ``Traded Notional`` in ``ranges``."""
-        fills = self.fills
-        if fills.sizes.get("fill", 0):
-            inside = backtest_stats.in_ranges(fills["timestamp"].values, ranges)
-            size = np.abs(fills["size"].values.astype(float))[inside]
-            price = fills["price"].values.astype(float)[inside]
-            # quantlab counts its fills (one order record each).
-            orders = int(inside.sum())
-            fees = float(fills["fee"].values[inside].sum())
-            notional = float((size * price).sum())
-        else:
-            orders, fees, notional = 0, 0.0, 0.0
-        return {"Total Orders": orders, "Total Fees Paid": fees, "Traded Notional": notional}
-
-    def turnover_rows(self, ranges) -> dict:
-        """The three turnover rows of ``ranges``, on the decided rebalances."""
-        return backtest_stats.turnover_stats(
-            self.turnover,
-            self.rebalances,
-            self.value["timestamp"].values,
-            ranges=ranges,
-            bar_interval=self.bar_interval,
-            year_freq=self.year_freq,
-        )
-
-    def win_rates(self, ranges, bench=None) -> dict:
-        return backtest_stats.win_rates(
-            self.returns_series,
-            self.rebalances,
-            ranges=ranges,
-            benchmark_returns=bench,
-        )
-
-    def relative(self, bench, ranges) -> dict:
-        return {
-            **backtest_stats.relative_stats(
-                self.returns_series,
-                bench,
-                bar_interval=self.bar_interval,
-                year_freq=self.year_freq,
-                ranges=ranges,
-            ),
-            **self.win_rates(ranges, bench),
-        }
 
 
 def _cut(pair, calendar: pd.DatetimeIndex) -> list[str] | None:
@@ -491,7 +440,7 @@ def _fill_bar(decision_date, calendar: pd.DatetimeIndex) -> pd.Timestamp | None:
     return calendar[position] if position < len(calendar) else None
 
 
-def _rejected_orders(orders: xr.Dataset, calendar: pd.DatetimeIndex) -> dict:
+def _rejected_orders(orders: xr.Dataset, calendar: pd.DatetimeIndex) -> list[dict]:
     """quantlab's rejected orders: an order with a fill bar that did not fill; the holding was kept."""
     rejected = []
     for row in range(orders.sizes.get("order", 0)):
@@ -510,7 +459,7 @@ def _rejected_orders(orders: xr.Dataset, calendar: pd.DatetimeIndex) -> dict:
                 "reason": str(orders["reason"].values[row]),
             }
         )
-    return {"rejected_order_count": len(rejected), "rejected_orders": rejected}
+    return rejected
 
 
 def _settlements(events: Sequence[Mapping], calendar: pd.DatetimeIndex) -> list[dict]:
@@ -758,20 +707,3 @@ def _executions(fills: xr.Dataset, events: Sequence[Mapping], closes: pd.DataFra
 def _cash(cycles: Sequence[CycleRecord]) -> list[float]:
     """The cash at each cycle's close: equity less the holdings, short-sale proceeds included."""
     return [c.equity * (1.0 - float(c.current_weights.sum())) for c in cycles]
-
-
-def _trade_counts(trips: xr.Dataset, ranges) -> dict:
-    """quantlab's slice counts: round trips closed inside ``ranges`` and open at each range's end."""
-    if not trips.sizes.get("trade", 0):
-        return {"Total Closed Trades": 0, "Total Open Trades": 0}
-    closed = trips["status"].values.astype(str) == "Closed"
-    entry = trips["entry_timestamp"].values.astype("datetime64[ns]")
-    exit_ = trips["exit_timestamp"].values.astype("datetime64[ns]")
-    open_count = 0
-    for _, end in ranges:
-        end_ts = date_range.label_ns(end)
-        open_count += int(((entry <= end_ts) & (~closed | (exit_ > end_ts))).sum())
-    return {
-        "Total Closed Trades": int((closed & backtest_stats.in_ranges(exit_, ranges)).sum()),
-        "Total Open Trades": open_count,
-    }
