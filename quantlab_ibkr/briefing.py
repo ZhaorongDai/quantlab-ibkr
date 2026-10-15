@@ -55,8 +55,15 @@ briefing is the single segment's and its text says so
 (``SINGLE_SEGMENT_NOTE``); a segment whose equity record is missing is
 refused.
 
-Building reads the directories and the quantlab run and writes nothing.
-Sending the briefing and the closed-loop replay are later steps of #60.
+``replay`` is the closed-loop replay of the current strategy segment
+(``segment_replay``, #67): its curve is drawn beside the live one and its
+figures (the return gap, the tracking error, the unfilled orders and the
+fees, live and replayed) form a section of their own; a replay that fails
+is stated (``replay_failure``) and the briefing still builds.
+
+Building reads the directories and the quantlab run; the only thing it
+writes is the replay's run directory, ``<live_dir>/briefing/replay``,
+replaced each time. Sending the briefing is a later step of #60.
 """
 
 from __future__ import annotations
@@ -64,6 +71,7 @@ from __future__ import annotations
 import html as html_lib
 import io
 import json
+import logging
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -73,12 +81,16 @@ import xarray as xr
 
 from quantlab.runs import backtest_stats
 from quantlab.runs.run_metrics import BenchmarkRecord
+from quantlab_ibkr import segment_replay
 from quantlab_ibkr.account_history import AccountHistory, StrategySegment
 from quantlab_ibkr._support.jsonable import python_scalar
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.metrics import bar_clock, benchmark_record
 from quantlab_ibkr.outputs import LiveRecorder, read_equity
 from quantlab_ibkr.quantlab_run import QuantlabRun
+from quantlab_ibkr.segment_replay import SegmentReplay
+
+logger = logging.getLogger(__name__)
 
 #: The content id the HTML body references the chart by (``<img src="cid:...">``).
 CHART_CID = "close-briefing-chart"
@@ -325,6 +337,13 @@ class CloseBriefing:
         empty on the fallback.
     switches : tuple of (pandas.Timestamp, str)
         ``(first decision date, strategy)`` of each segment after the first.
+    replay : SegmentReplay or None
+        The closed-loop replay of the current strategy segment; ``None``
+        when it failed. ``curve`` and ``account_curve`` carry it as
+        ``replay_cumulative_return``, rebased to the live curve at the
+        segment's start (NaN before it).
+    replay_failure : str or None
+        Why the replay failed; ``None`` when it ran.
 
     Examples
     --------
@@ -352,6 +371,8 @@ class CloseBriefing:
     account_curve: xr.Dataset | None = None
     segments: tuple[StrategySegment, ...] = ()
     switches: tuple[tuple[pd.Timestamp, str], ...] = ()
+    replay: SegmentReplay | None = None
+    replay_failure: str | None = None
 
     @property
     def rows(self) -> tuple[tuple[str, str], ...]:
@@ -464,6 +485,12 @@ def close_briefing(config: TraderConfig) -> CloseBriefing:
         )
     book = _book(config, run, live_dir, equity)
     sections = sections + _book_sections(book)
+    replay, replay_failure = _replay(config, run, live_dir, timestamps)
+    if replay is not None:
+        curve = segment_replay.replay_curve(curve, replay)
+        if account_curve is not None:
+            account_curve = segment_replay.replay_curve(account_curve, replay)
+    sections = (*sections, segment_replay.replay_section(replay, replay_failure))
     subject = f"【IBKR 模拟盘】{name} {t.date()} 收盘简报"
     return CloseBriefing(
         t=t,
@@ -482,7 +509,21 @@ def close_briefing(config: TraderConfig) -> CloseBriefing:
         segments=segments,
         switches=switches,
         book=book,
+        replay=replay,
+        replay_failure=replay_failure,
     )
+
+
+def _replay(
+    config: TraderConfig, run: QuantlabRun, live_dir: Path, timestamps: pd.DatetimeIndex
+) -> tuple[SegmentReplay | None, str | None]:
+    """``(replay, None)``, or ``(None, reason)`` when the replay fails; logged either way."""
+    try:
+        start = segment_replay.segment_start(config, live_dir, timestamps)
+        return segment_replay.replay_segment(config, run, live_dir, start, timestamps[-1]), None
+    except Exception as error:  # the briefing states it and still goes out
+        logger.exception("closed-loop replay of %s failed", live_dir)
+        return None, f"{type(error).__name__}: {error}"
 
 
 def _figures(
@@ -696,6 +737,11 @@ def _chart(
         top.plot(
             when, curve["benchmark_cumulative_return"].values * 100.0,
             color="#888888", label=symbol or "Benchmark",
+        )
+    if "replay_cumulative_return" in curve:
+        top.plot(
+            when, curve["replay_cumulative_return"].values * 100.0,
+            color="#e67e22", linestyle="--", label="Closed-loop replay",
         )
     top.axhline(0.0, color="#cccccc", linewidth=0.8)
     top.set_ylabel("Cumulative return [%]")

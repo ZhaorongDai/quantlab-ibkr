@@ -122,6 +122,14 @@ class Broker:
             int(order.quantity.as_decimal()), "PreSubmitted",
         ))
 
+    def fill_price(self, order, k):
+        """The price an order fills at on bar k: the raw opening print."""
+        return self.opens[SYMBOL_OF[order.con_id]][k]
+
+    def fee(self, side, quantity, price):
+        """The commission of a fill: the run's fee fraction of the notional, to the cent."""
+        return round(quantity * price * self.fee_rate, 2)
+
     def open_auction(self, k):
         """Fill every working order at bar k's raw open."""
         when = pd.Timestamp(f"{self.bars[k].date()} 09:30", tz="America/New_York").tz_convert("UTC")
@@ -133,8 +141,8 @@ class Broker:
                     "Order rejected - no opening auction",
                 ))
                 continue
-            price = self.opens[permno][k]
-            fee = round(order.quantity * price * self.fee_rate, 2)
+            price = self.fill_price(order, k)
+            fee = self.fee(order.side, order.quantity, price)
             sign = 1 if order.side == "BUY" else -1
             self.cash -= sign * order.quantity * price + fee
             self.positions[permno] = self.positions.get(permno, 0) + sign * order.quantity

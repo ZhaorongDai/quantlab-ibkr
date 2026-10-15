@@ -12,7 +12,8 @@ run (one PERMNO, the run's ``benchmark_dataset``). Locked:
 - a live run directory with no marked bar is refused;
 - the HTML references the chart by its content id and the plain text
   carries the same figures;
-- building writes nothing into the live run directory;
+- building writes nothing into the live run directory's own files (the
+  replay goes under its ``briefing/`` subdirectory, #67);
 - ``live brief --no-send --output DIR`` writes the three files.
 """
 
@@ -134,14 +135,15 @@ def test_the_html_references_the_chart_by_content_id_and_the_text_carries_the_sa
 
 
 def _snapshot(directory):
+    """Every file of the live run directory but the briefing's own (the replay, #67)."""
     return {
         str(path.relative_to(directory)): path.read_bytes()
         for path in sorted(directory.rglob("*"))
-        if path.is_file()
+        if path.is_file() and path.relative_to(directory).parts[0] != "briefing"
     }
 
 
-def test_building_writes_nothing_into_the_live_run_directory(day):
+def test_building_writes_nothing_into_the_live_run_directorys_files(day):
     day.trade(range(FIRST, 8))
     before = _snapshot(day.live_dir)
     briefing.close_briefing(day.config)

@@ -80,10 +80,26 @@ Each weekday has two steps, each a short run; `recheck` and `brief` run on their
   reasons, rule events, unfilled orders on the open they missed, corporate actions, live
   events), the orders the venue refused at t's submission and the Decision recheck's latest
   result (`decision_recheck.json`). Securities are named by the price dataset's ticker lookup,
-  by PERMNO when it has no ticker. It writes nothing into the live run directory, and a
-  directory with no marked bar is refused. Sending it by e-mail is not built yet, so
+  by PERMNO when it has no ticker. It writes nothing into the live run directory's own files
+  (only the replay below, under its `briefing/` subdirectory), and a directory with no marked
+  bar is refused. Sending it by e-mail is not built yet, so
   `--no-send` is required.
   In Python, `quantlab_ibkr.briefing.close_briefing(config)` returns the same briefing.
+
+  The briefing also draws a **Closed-loop replay** of the current strategy segment beside the
+  live curve (`quantlab_ibkr.segment_replay`, #67), so the gap between them is execution
+  alone. Each briefing runs the closed-loop backtest (`runner.run`, backtest venue) on the
+  quantlab run from the segment's first decision date (the account history's segment of
+  this directory, else its first marked bar) to t, deciding from the live prediction store's
+  rows, the same predictions live decided from, not the run's own panel. It starts in cash at
+  the live equity of the segment's first bar and charges the closed-loop default fee model
+  (IBKR Pro Fixed); when the account was not empty at that bar the briefing says so. Its run
+  directory is `<live_dir>/briefing/replay`, replaced each time, with `replay.json` recording
+  its inputs and wall time. The figures add the segment's live and replayed returns, the
+  cumulative return gap (live minus replay, in percentage points), the tracking error, the
+  unfilled orders and the cumulative fees, live and replayed. The command prints the replay's
+  wall time to standard error (logged as a warning past 15 minutes, the cue for an
+  incremental replay); a replay that fails is stated in the briefing, which still builds.
 
 - `quantlab-ibkr live history show ACCOUNT [--history-dir DIR]` prints the account's history
   (below): its strategy segments, oldest first, or that it has none. `DIR` defaults to

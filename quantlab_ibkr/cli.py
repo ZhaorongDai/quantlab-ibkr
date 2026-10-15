@@ -35,7 +35,9 @@ live configs keep the histories in, ``$QUANTLAB_DATA_DIR/live`` by default
 close briefing of the live run directory's last marked bar
 (``quantlab_ibkr.briefing``, #61) and writes its PNG, HTML and plain text to
 ``DIR`` (printing the directory), or prints the text; sending it is not
-built yet, so ``--no-send`` is required.
+built yet, so ``--no-send`` is required. It runs the closed-loop replay of
+the current strategy segment into ``<live_dir>/briefing/replay`` (#67) and
+prints the replay's wall time, or why it failed, to standard error.
 """
 
 from __future__ import annotations
@@ -307,6 +309,10 @@ def _brief(config: TraderConfig, args: argparse.Namespace) -> int:
     from quantlab_ibkr.briefing import close_briefing
 
     brief = close_briefing(config)
+    if brief.replay is not None:
+        print(f"closed-loop replay: {brief.replay.seconds:.1f} s", file=sys.stderr)
+    else:
+        print(f"closed-loop replay failed: {brief.replay_failure}", file=sys.stderr)
     if args.output is None:
         print(brief.text, end="")
     else:

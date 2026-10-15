@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import xarray as xr
 
 from quantlab.runs.record import DataRecorder
 from quantlab_ibkr.base.config import TraderConfig
@@ -26,7 +27,7 @@ from quantlab_ibkr.strategy import PortfolioStrategy
 TRACKED_BLOCKS = ("whole", "in_sample", "out_of_sample", "benchmark", "relative", "execution")
 
 
-def run(config: TraderConfig) -> Path:
+def run(config: TraderConfig, *, predictions: xr.Dataset | None = None) -> Path:
     """Execute the quantlab run ``config`` names and write a trader run directory.
 
     Closed loop (ADR 0001, 0008) rebuilds the run's decision inputs
@@ -51,10 +52,20 @@ def run(config: TraderConfig) -> Path:
     blocks of ``TRACKED_BLOCKS`` and which carries ``report.html``. A run
     that raises is finished as failed.
 
+    ``predictions`` replaces the run's prediction panel in a closed loop:
+    the close briefing's replay of a live segment decides from the live
+    prediction store's rows (#67). Its window is then bounded by the
+    predictions' first bar, not by the run's window, since a live segment
+    trades after the run's last bar.
+
     Parameters
     ----------
     config : TraderConfig
         Which quantlab run, which venue, which loop and window.
+    predictions : xarray.Dataset, optional
+        Closed loop only: the prediction rows to decide from, one variable
+        per label on ``(timestamp, symbol)``; the run's own panel when
+        ``None``.
 
     Returns
     -------
@@ -66,7 +77,9 @@ def run(config: TraderConfig) -> Path:
     ValueError
         If the quantlab run cannot be executed (see ``QuantlabRun.load`` and,
         closed loop, ``QuantlabRun.decision_inputs``), the window is empty or
-        outside the run's, or the venue refuses its execution settings.
+        outside the run's (with ``predictions``: starts before their first
+        bar), the venue refuses its execution settings, or ``predictions``
+        are given to an open loop.
 
     Examples
     --------
@@ -79,10 +92,12 @@ def run(config: TraderConfig) -> Path:
         run_dir = run(TraderConfig("runs/WeightsVectorBt_20261001", BacktestVenueConfig()))
         read_metrics(run_dir)["whole"]["Total Return [%]"]
     """
+    if predictions is not None and config.loop is not Loop.CLOSED:
+        raise ValueError("predictions replace a closed loop's prediction panel; the loop is open")
     quantlab_run = QuantlabRun.load(config.quantlab_run)
-    start, end = _window(config, quantlab_run)
+    start, end = _window(config, quantlab_run, predictions)
     if config.loop is Loop.CLOSED:
-        targets, request = _closed_loop(quantlab_run, start, end)
+        targets, request = _closed_loop(quantlab_run, start, end, predictions)
     else:
         targets, request = _open_loop(quantlab_run, start, end)
     venue = config.venue.build(quantlab_run, request)
@@ -139,13 +154,17 @@ def _open_loop(
 
 
 def _closed_loop(
-    run: QuantlabRun, start: pd.Timestamp, end: pd.Timestamp
+    run: QuantlabRun,
+    start: pd.Timestamp,
+    end: pd.Timestamp,
+    predictions: xr.Dataset | None = None,
 ) -> tuple[TargetSource, ReplayRequest]:
     """Return the constructor's targets and the request for the PERMNOs it can trade.
 
     A rule only trades what it can select, a security with a finite
     prediction, so instruments are made for the PERMNOs with any finite
-    prediction in the window; every holding is one of them.
+    prediction in the window; every holding is one of them. ``predictions``
+    replaces the run's prediction panel.
     """
     inputs = run.decision_inputs(end)
     if inputs.anchor > end:
@@ -153,7 +172,9 @@ def _closed_loop(
             f"replay window ends {end.date()}, before the prediction panel starts "
             f"{inputs.anchor.date()}"
         )
-    predictions = run.prediction_panel().predictions.sel(timestamp=slice(start, end))
+    if predictions is None:
+        predictions = run.prediction_panel().predictions
+    predictions = predictions.sel(timestamp=slice(start, end))
     finite = np.zeros(predictions.sizes["symbol"], dtype=bool)
     for name in predictions.data_vars:
         finite |= np.isfinite(
@@ -165,9 +186,22 @@ def _closed_loop(
     )
 
 
-def _window(config: TraderConfig, run: QuantlabRun) -> tuple[pd.Timestamp, pd.Timestamp]:
-    """Return the replay window: the run's, narrowed by ``config.start``/``end``."""
-    run_start, run_end = run.window
+def _window(
+    config: TraderConfig, run: QuantlabRun, predictions: xr.Dataset | None = None
+) -> tuple[pd.Timestamp, pd.Timestamp]:
+    """Return the replay window: the run's, narrowed by ``config.start``/``end``.
+
+    With ``predictions`` the bounds are their first bar and, for the end,
+    no later bound than ``config.end`` itself (a live segment's last bar).
+    """
+    if predictions is not None:
+        bars = pd.DatetimeIndex(predictions["timestamp"].values)
+        if not len(bars):
+            raise ValueError("the replay's predictions hold no bar")
+        run_start = bars[0]
+        run_end = bars[-1] if config.end is None else max(bars[-1], pd.Timestamp(config.end))
+    else:
+        run_start, run_end = run.window
     start = run_start if config.start is None else pd.Timestamp(config.start)
     end = run_end if config.end is None else pd.Timestamp(config.end)
     if start < run_start or end > run_end or start > end:
