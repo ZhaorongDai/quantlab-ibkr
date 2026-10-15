@@ -244,6 +244,9 @@ class QuantlabRun:
         ]
         if "symbol" in prices.dims:
             prices = prices.isel(symbol=0, drop=True)
+        # A missing price is carried forward, so the move across it lands on
+        # the next price's bar instead of being lost (#69).
+        prices = prices.ffill("timestamp")
         returns = (prices / prices.shift(timestamp=1) - 1.0).fillna(0.0)
         metrics = self.backtest_run.metrics()
         info = metrics.get("stitched", metrics).get("benchmark") or {}

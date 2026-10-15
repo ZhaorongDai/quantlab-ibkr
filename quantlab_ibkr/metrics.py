@@ -190,7 +190,20 @@ def window_benchmark(returns: xr.DataArray, timestamps) -> xr.DataArray:
 
     The trader's book starts in cash at the close of its first bar, so the
     benchmark's first return in the window is 0, as quantlab's own is on the
-    run's first bar; the rest are the quantlab run's.
+    run's first bar. Each later return is the benchmark's return since the
+    trader's previous bar: the quantlab run's own return when the two bars
+    are adjacent benchmark bars, the compounded return of the benchmark bars
+    between them otherwise. A live trader marks only the bars its decide step
+    ran on, so after a bar it skipped its own return covers the skipped days,
+    and the benchmark's must as well (#69).
+
+    A trader bar after the benchmark's last (a live day marked before the
+    vendor's evening update) is NaN, not an error. A trader bar the benchmark
+    lacks between two of its bars carries no move (the move is in the next
+    trader bar's return), and a NaN benchmark return inside a compounded gap
+    counts as no move (``QuantlabRun.benchmark`` carries a missing price
+    forward, so its move is in the next price's return). A trader bar before
+    the benchmark's first, or any bar of an empty benchmark, is NaN.
 
     Examples
     --------
@@ -201,12 +214,39 @@ def window_benchmark(returns: xr.DataArray, timestamps) -> xr.DataArray:
     >>> later = pd.bdate_range("2024-01-03", periods=3)
     >>> window_benchmark(run_returns, later).values.tolist()
     [0.0, 0.02, nan]
+
+    A skipped bar: the second return compounds both days.
+
+    >>> [round(r, 6) for r in window_benchmark(run_returns, bars[[0, 2]]).values.tolist()]
+    [0.0, 0.0302]
+
+    A trader bar the benchmark lacks carries no move; the next one has it.
+
+    >>> gap = xr.DataArray([0.0, 0.02], dims="timestamp", coords={"timestamp": bars[[0, 2]]})
+    >>> window_benchmark(gap, bars).values.tolist()
+    [0.0, 0.0, 0.02]
     """
-    # A bar the benchmark has not published yet (a live day marked before
-    # the vendor's evening update) is NaN, not an error.
-    window = returns.reindex(timestamp=timestamps).copy()
-    window[0] = 0.0
-    return window
+    run_returns = returns.values.astype(float)
+    index = pd.DatetimeIndex(returns["timestamp"].values)
+    bars = pd.DatetimeIndex(timestamps)
+    # The benchmark bar each trader bar is marked at: its own, or the last
+    # before it; -1 before the benchmark's first bar.
+    marked_at = index.searchsorted(bars, side="right") - 1
+    values = np.full(len(bars), np.nan)
+    for i in range(1, len(bars)):
+        previous, current = marked_at[i - 1], marked_at[i]
+        if not len(index) or bars[i] > index[-1] or current < 0:
+            continue
+        if current == previous + 1:
+            # Adjacent bars: the run's return as it is (a NaN stays NaN), so
+            # a window without a skipped bar is bit-identical to the run's.
+            values[i] = run_returns[current]
+        else:
+            values[i] = np.prod(1.0 + np.nan_to_num(run_returns[previous + 1 : current + 1])) - 1.0
+    values[0] = 0.0
+    return xr.DataArray(
+        values, dims="timestamp", coords={"timestamp": bars.values}, name=returns.name
+    )
 
 def rebalance_record(cycles: Sequence[CycleRecord], timestamps) -> xr.Dataset:
     """Return the run's rebalance record on ``timestamps``: quantlab's ``scheduled`` and ``decided``.

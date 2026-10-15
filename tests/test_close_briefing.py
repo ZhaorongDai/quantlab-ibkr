@@ -14,7 +14,9 @@ run (one PERMNO, the run's ``benchmark_dataset``). Locked:
   carries the same figures;
 - building writes nothing into the live run directory's own files (the
   replay goes under its ``briefing/`` subdirectory, #67);
-- ``live brief --no-send --output DIR`` writes the three files.
+- ``live brief --no-send --output DIR`` writes the three files;
+- after a bar never decided, the benchmark's return compounds the skipped
+  bars, in the briefing and in ``metrics.json`` alike (#69).
 """
 
 import html
@@ -23,6 +25,7 @@ import json
 import numpy as np
 import pandas as pd
 import pytest
+import xarray as xr
 
 from quantlab.runs import backtest_stats
 from quantlab_ibkr import briefing, cli
@@ -167,3 +170,47 @@ def test_live_brief_no_send_writes_the_three_files(day, capsys):
     with pytest.raises(SystemExit):  # sending is #64
         cli.main(["live", "brief", str(path)])
     assert "--no-send" in capsys.readouterr().err
+
+
+def test_the_benchmark_compounds_the_days_of_a_bar_never_decided(day):
+    # Bar 8 is never decided, so bar 9's live return covers bars 8 and 9; the
+    # benchmark's must too (#69), in the briefing and in metrics.json alike.
+    day.trade(range(FIRST, 8))
+    day.trade([9])
+    brief = briefing.close_briefing(day.config)
+    assert brief.day.benchmark_return_pct == pytest.approx((_SPY_CLOSE[9] / _SPY_CLOSE[7] - 1.0) * 100.0, rel=1e-12)
+    held = (_SPY_CLOSE[9] / _SPY_CLOSE[FIRST] - 1.0) * 100.0
+    assert brief.curve["benchmark_cumulative_return"].values[-1] == pytest.approx(held / 100.0, rel=1e-12)
+    assert brief.segment.benchmark_total_return_pct == pytest.approx(held, rel=1e-12)
+    metrics = json.loads((day.live_dir / "metrics.json").read_text())
+    assert metrics["benchmark"]["whole"]["Total Return [%]"] == pytest.approx(held, rel=1e-12)
+    # Excess and IR are relative_stats of the corrected series, computed here from the raw closes.
+    equity = read_equity(day.live_dir)
+    bars = [5, 6, 7, 9]
+    expected = np.array([0.0] + [_SPY_CLOSE[b] / _SPY_CLOSE[a] - 1.0 for a, b in zip(bars, bars[1:])])
+    timestamps = equity["timestamp"].values
+    whole = [(str(pd.Timestamp(timestamps[0]).date()), str(pd.Timestamp(timestamps[-1]).date()))]
+    relative = backtest_stats.relative_stats(
+        equity["returns"],
+        xr.DataArray(expected, dims="timestamp", coords={"timestamp": timestamps}),
+        bar_interval="1D", year_freq=backtest_stats.year_freq("1D", 252, 390), ranges=whole,
+    )
+    assert brief.segment.excess_return_pct == pytest.approx(relative["Excess Return [%]"], rel=1e-9)
+    assert brief.segment.information_ratio == pytest.approx(relative["Information Ratio"], rel=1e-9)
+
+
+def test_a_missing_benchmark_price_moves_the_next_bar_not_nothing(tmp_path):
+    # The benchmark has no price on bar 7: bar 7 carries no move and bar 8
+    # carries the move from bar 6 (#69), so the curve is still held from the first close.
+    close = list(_SPY_CLOSE)
+    close[7] = float("nan")
+    day = Day(tmp_path, benchmark=({84398: [c * 0.999 for c in close]}, {84398: close}))
+    day.trade(range(FIRST, 10))
+    brief = briefing.close_briefing(day.config)
+    returns = benchmark_record(
+        day.run.benchmark(brief.curve["timestamp"].values[0], brief.t), brief.curve["timestamp"].values
+    ).returns.values
+    assert returns[2] == 0.0  # bar 7
+    assert returns[3] == pytest.approx(_SPY_CLOSE[8] / _SPY_CLOSE[6] - 1.0, rel=1e-12)
+    held = _SPY_CLOSE[9] / _SPY_CLOSE[FIRST] - 1.0
+    assert brief.curve["benchmark_cumulative_return"].values[-1] == pytest.approx(held, rel=1e-12)
