@@ -314,10 +314,10 @@ class ConstructorTargets(TargetSource):
         quantlab's ``DecisionInputs.preloaded`` over the window's bars from
         ``start`` (or the anchor, when later: no earlier bar rebalances) to
         ``end``: the prices with the rule's history, their tradability, the
-        declared factors and risk exposures are read once, through
-        quantlab's recorded reads, and the risk model's estimate store is
-        held in memory, so a decision opens no store and decides exactly
-        what it decides without the preload. A replay (the backtest venue's
+        declared factors, and the risk model's exposures and estimate rows
+        are read once, through quantlab's recorded reads, so a decision
+        opens no store and decides exactly what it decides without the
+        preload. A replay (the backtest venue's
         closed loop, the Decision recheck) preloads; a live run does not.
 
         Parameters
