@@ -78,7 +78,13 @@ from quantlab_ibkr._support.jsonable import jsonable, python_scalar
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.base.venue import MARKET_TZ, Loop, NextOpenOrder, VenueReport
 from quantlab_ibkr.decision import CycleResult
-from quantlab_ibkr.metrics import CycleRecord, cut_folds, run_metrics, window_benchmark
+from quantlab_ibkr.metrics import (
+    CycleRecord,
+    cut_folds,
+    decided_rebalances,
+    run_metrics,
+    window_benchmark,
+)
 from quantlab_ibkr.quantlab_run import QuantlabRun
 
 #: The notes of every trader run's ``metrics.json`` and report.
@@ -700,7 +706,6 @@ class RunRecorder:
             init_cash=self.init_cash,
             bar_interval=bar_interval,
             year_freq=year_freq,
-            rebalance_periods=run.rebalance_periods,
             split=run.split(),
             benchmark=benchmark,
             closed_loop=self.config.loop is Loop.CLOSED,
@@ -762,6 +767,7 @@ class RunRecorder:
                 if fills.sizes.get("fill", 0)
                 else xr.Dataset({name: ("order", []) for name in ("timestamp", "size", "price")}),
                 equity["value"],
+                rebalances=decided_rebalances(self._cycles),
                 init_cash=self.init_cash,
                 bar_interval=bar_interval,
                 trading_days_per_year=run.trading_days_per_year,
@@ -769,6 +775,7 @@ class RunRecorder:
             ),
             **report_holdings_inputs(
                 holdings["holding"], decisions["weight"],
+                rebalances=decided_rebalances(self._cycles),
                 label=_symbol_names(run.price_dataset.ticker_lookup()),
             ),
         )

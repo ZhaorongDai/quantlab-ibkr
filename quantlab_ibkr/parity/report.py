@@ -19,6 +19,10 @@ from quantlab_ibkr.quantlab_run import QuantlabRun
 class Statistics:
     """The report's per-rung statistics, by quantlab's public functions and the run's annualization.
 
+    Every rung executes the run's rebalance table, so its turnover counts the
+    decided rebalances the run recorded (``decided`` of its rebalance
+    table).
+
     Examples
     --------
     ::
@@ -31,7 +35,8 @@ class Statistics:
     """
 
     def __init__(self, run: QuantlabRun, timestamps: pd.DatetimeIndex):
-        self.rebalance_periods = run.rebalance_periods
+        decided = run.rebalance_table()["decided"]
+        self.rebalances = decided["timestamp"].values[decided.values]
         self.bar_interval = (
             pd.Series(np.diff(timestamps.values)).mode().iloc[0]
             if len(timestamps) > 1
@@ -74,15 +79,18 @@ class Statistics:
             if len(orders)
             else xr.Dataset()
         )
+        bars = equity.index.values
         turnover = backtest_stats.turnover_stats(
             backtest_stats.turnover(
                 flows,
-                xr.DataArray(equity.to_numpy(), dims="timestamp", coords={"timestamp": equity.index.values}),
+                xr.DataArray(equity.to_numpy(), dims="timestamp", coords={"timestamp": bars}),
                 rung.init_cash,
             ),
+            self.rebalances,
+            bars,
+            ranges=[(backtest_stats.bar_label(bars[0]), backtest_stats.bar_label(bars[-1]))],
             bar_interval=self.bar_interval,
             year_freq=self.year_freq,
-            rebalance_periods=self.rebalance_periods,
         )
         return {
             "rung": rung.name,

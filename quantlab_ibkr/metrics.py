@@ -9,6 +9,11 @@ has, computed by quantlab's own public statistics
   Value`` and ``End Value``, ``Max Gross Exposure [%]``, ``Total Fees Paid``,
   the round-trip trade statistics, the three turnover rows, ``Total Orders``
   (fills of next-open orders) and the win rates;
+
+  the turnover rows and the win rates count the run's decided rebalances
+  (``decided_rebalances``: the cycles with a finite target), as quantlab
+  counts the decided bars of its rebalance record, never the bars with
+  fills; a delisting settlement is no fill here, so it is no turnover;
 - ``in_sample`` / ``out_of_sample``: quantlab's slice rows (return
   statistics, ``Total Orders``, ``Total Fees Paid``, ``Traded Notional``, the
   closed and open round trips, turnover, win rates) over the quantlab run's
@@ -112,6 +117,35 @@ class CycleRecord:
     equity: float
 
 
+def decided_rebalances(cycles: Sequence[CycleRecord]) -> np.ndarray:
+    """Return the bars of the run's decided rebalances: the cycles with a finite target.
+
+    A cycle that did not rebalance (``weights`` is ``None``) or held
+    (all NaN: a construction failure, or a table row without a target) is
+    not one; a rebalance that placed no order is. These are the decided bars
+    of quantlab's rebalance record, which its turnover and win rates count.
+
+    Examples
+    --------
+    >>> bars = pd.bdate_range("2024-01-02", periods=3)
+    >>> cycles = [
+    ...     CycleRecord(bars[0], pd.Series({10001: 1.0}), pd.Series(dtype=float), 1e4),
+    ...     CycleRecord(bars[1], None, pd.Series({10001: 1.0}), 1e4),
+    ...     CycleRecord(bars[2], pd.Series({10001: float("nan")}), pd.Series({10001: 1.0}), 1e4),
+    ... ]
+    >>> decided_rebalances(cycles).astype(str).tolist()
+    ['2024-01-02T00:00:00.000000000']
+    """
+    return np.array(
+        [
+            pd.Timestamp(c.timestamp).to_datetime64()
+            for c in cycles
+            if c.weights is not None and np.isfinite(c.weights.to_numpy(dtype=float)).any()
+        ],
+        dtype="datetime64[ns]",
+    )
+
+
 def window_benchmark(returns: xr.DataArray, timestamps) -> xr.DataArray:
     """Return the benchmark's per-bar returns over the trader's bars, held from the first close.
 
@@ -147,7 +181,6 @@ def run_metrics(
     init_cash: float,
     bar_interval,
     year_freq: pd.Timedelta,
-    rebalance_periods: int,
     split: Mapping,
     benchmark: Mapping | None,
     closed_loop: bool,
@@ -167,7 +200,9 @@ def run_metrics(
         The run's ``orders.zarr`` plus ``decided_quantity``, the quantity the
         decision sized (before a split rescaled it).
     cycles : sequence of CycleRecord
-        Every decision cycle of the run, one per bar.
+        Every decision cycle of the run, one per bar; its decided
+        rebalances (``decided_rebalances``) mark the rebalances the
+        turnover and the win rates count.
     events : sequence of dict
         The run's ``events.json`` events.
     closes : pandas.DataFrame
@@ -178,8 +213,6 @@ def run_metrics(
         The bar spacing.
     year_freq : pandas.Timedelta
         One year, ``backtest_stats.year_freq``.
-    rebalance_periods : int
-        Bars between rebalances.
     split : Mapping
         The quantlab run's split keys (``QuantlabRun.split``).
     benchmark : Mapping or None
@@ -205,12 +238,12 @@ def run_metrics(
         metrics = run_metrics(
             equity=equity, fills=fills, orders=orders, cycles=cycles, events=events,
             closes=closes, init_cash=1_000_000.0, bar_interval=pd.Timedelta("1D"),
-            year_freq=backtest_stats.year_freq("1D", 252, 390), rebalance_periods=5,
+            year_freq=backtest_stats.year_freq("1D", 252, 390),
             split=run.split(), benchmark=run.benchmark(start, end), closed_loop=True, notes=NOTES,
         )
         metrics["whole"]["Total Return [%]"]
     """
-    stats = _Stats(equity, fills, init_cash, bar_interval, year_freq, rebalance_periods)
+    stats = _Stats(equity, fills, init_cash, bar_interval, year_freq, decided_rebalances(cycles))
     timestamps = equity["timestamp"].values
     calendar = pd.DatetimeIndex(timestamps)
     whole_range = [(date_range.bar_label(timestamps[0]), date_range.bar_label(timestamps[-1]))]
@@ -301,13 +334,13 @@ def run_metrics(
 class _Stats:
     """quantlab's statistics of one run, bound to its series and conventions."""
 
-    def __init__(self, equity, fills, init_cash, bar_interval, year_freq, rebalance_periods):
+    def __init__(self, equity, fills, init_cash, bar_interval, year_freq, rebalances):
         self.value = equity["value"]
         self.returns_series = equity["returns"]
         self.fills = fills
         self.bar_interval = pd.Timedelta(bar_interval)
         self.year_freq = year_freq
-        self.rebalance_periods = rebalance_periods
+        self.rebalances = rebalances
         self.turnover = backtest_stats.turnover(
             xr.Dataset(
                 {name: ("order", fills[name].values) for name in ("timestamp", "size", "price")}
@@ -347,25 +380,20 @@ class _Stats:
         return {"Total Orders": orders, "Total Fees Paid": fees, "Traded Notional": notional}
 
     def turnover_rows(self, ranges) -> dict:
-        """The three turnover rows of the fill bars in ``ranges``."""
-        turnover = self.turnover.isel(
-            timestamp=backtest_stats.in_ranges(self.turnover["timestamp"].values, ranges)
+        """The three turnover rows of ``ranges``, on the decided rebalances."""
+        return backtest_stats.turnover_stats(
+            self.turnover,
+            self.rebalances,
+            self.value["timestamp"].values,
+            ranges=ranges,
+            bar_interval=self.bar_interval,
+            year_freq=self.year_freq,
         )
-        return {
-            **backtest_stats.turnover_stats(
-                turnover,
-                bar_interval=self.bar_interval,
-                year_freq=self.year_freq,
-                rebalance_periods=self.rebalance_periods,
-            ),
-        }
 
     def win_rates(self, ranges, bench=None) -> dict:
         return backtest_stats.win_rates(
             self.returns_series,
-            self.fills["timestamp"].values
-            if self.fills.sizes.get("fill", 0)
-            else np.array([], dtype="datetime64[ns]"),
+            self.rebalances,
             ranges=ranges,
             benchmark_returns=bench,
         )

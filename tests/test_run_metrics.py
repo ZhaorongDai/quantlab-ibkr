@@ -20,6 +20,7 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.runs import backtest_stats
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.tracking.base import Tracker, TrackingRun
@@ -111,15 +112,40 @@ def test_whole_block_has_quantlab_names_and_the_hand_worked_values(open_replay):
     assert "Traded Notional" not in whole
     turnovers = [10_300 / 10_000, (6200 + 5830.8) / 11_189.70]
     assert whole["Total Turnover [%]"] == pytest.approx(100 * sum(turnovers), abs=1e-9)
+    # Two decided rebalances fill in the window (bars 0 and 2; bar 5's has no next open).
     assert whole["Turnover per Rebalance [%]"] == pytest.approx(50 * sum(turnovers), abs=1e-9)
-    # Annualized: 252 bars a year, one rebalance every bar.
+    # Annualized: the total over the window's years, 6 bars of a 252-bar year.
     assert whole["Annualized Turnover [%]"] == pytest.approx(
-        50 * sum(turnovers) * 252, abs=1e-6
+        100 * sum(turnovers) / (6 / 252), abs=1e-6
     )
     for name in ("Sharpe Ratio", "Max Drawdown [%]", "Sortino Ratio", "Rebalance Win Rate [%]"):
         assert name in whole
     # A whole-share book bought from a full account on bar 1 goes up every bar.
     assert whole["Max Drawdown [%]"] is None
+
+
+def test_a_decided_rebalance_without_orders_counts_and_bounds_a_holding_period(tmp_path):
+    """Bar 3 decides 0.0 for 10003, which is not held: a rebalance that places no order.
+
+    It counts in the mean turnover per rebalance and starts a holding period
+    at bar 4, as quantlab's backtester counts it; the fills alone would leave
+    it out of both.
+    """
+    weights = {**WEIGHTS, 10003: [0.0, np.nan, 0.0, 0.0, np.nan, 0.0]}
+    quantlab_run = build_quantlab_run(tmp_path / "quantlab", BARS, OPEN, CLOSE, weights)
+    run_dir = run(TraderConfig(quantlab_run=str(quantlab_run), venue=BacktestVenueConfig(),
+                               loop="open", output_dir=str(tmp_path / "trader")))
+
+    whole = _metrics(run_dir)["whole"]
+
+    turnovers = [10_300 / 10_000, (6200 + 5830.8) / 11_189.70]
+    assert whole["Total Turnover [%]"] == pytest.approx(100 * sum(turnovers), abs=1e-9)
+    assert whole["Turnover per Rebalance [%]"] == pytest.approx(100 * sum(turnovers) / 3, abs=1e-9)
+    equity = xr.open_zarr(run_dir / "equity.zarr")
+    assert whole["Rebalance Win Rate [%]"] == backtest_stats.win_rates(
+        equity["returns"].load(), BARS[[0, 2, 3, 5]].values,
+        ranges=[("2024-01-02", "2024-01-09")],
+    )["Rebalance Win Rate [%]"]
 
 
 def test_execution_block_from_the_hand_ledger(open_replay):
