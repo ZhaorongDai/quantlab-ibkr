@@ -49,6 +49,10 @@ Each weekday has two steps, each a short run:
   store's row, with the recorded current weights. The result must equal the decision bit for
   bit.
 
+- `quantlab-ibkr live history show ACCOUNT [--history-dir DIR]` prints the account's history
+  (below): its strategy segments, oldest first, or that it has none. `DIR` defaults to
+  `$QUANTLAB_DATA_DIR/live`; without either the command is refused.
+
 The config is a `TraderConfig` JSON file whose venue is an `IbkrVenueConfig`. Flags given
 with the file override its venue fields: `--dry-run`, `--host`, `--port`, `--client-id`,
 `--account-id`, `--order-deadline`, `--prediction-store`, `--live-dir`. Without a file,
@@ -124,6 +128,25 @@ holds `con_ids.json` (the conId cache) and `decision_recheck.json`.
   An order IBKR reports nothing about is left as `submitted` and listed in the output.
 
 A day skipped entirely leaves no equity row for its bar. The next decide marks the next bar.
+
+**Account history** (ADR 0012). Each account has one file, `account_history_<ACCOUNT>.json`,
+beside the live run directories: in the venue's `history_dir` when the config sets it, else in
+the parent of the live run directory's parent (`/data/quantlab/live` for
+`/data/quantlab/live/<strategy>/ibkr`). It holds the account's strategy segments in order:
+the live run directory, the strategy (the live run directory's parent's name), the first and
+the last decision date (`null` for the current segment). It is the only place a strategy switch
+is written down. `decide` keeps it current:
+
+- A live run directory's first real submission to the account begins its segment on t, and ends
+  the previous segment at the bar before t. An order adopted on the directory's first day counts
+  as its submission. Days that submit nothing (marking or holding) begin nothing.
+- A real decide from a directory whose segment another directory has taken over is refused
+  before any connection (exit 1): one account runs one strategy at a time. A dry run of it is
+  still allowed.
+- A dry run, and a decide on a bar already recorded, never read or write it.
+- The file is replaced atomically on every write.
+
+Switching strategies needs no step beyond changing the cron line to the new live config.
 
 `scripts/live_daily.sh` runs a live day on the server. Debian's cron has no `CRON_TZ`, so cron calls
 it every hour and the script checks the New York time itself (daylight saving needs no edit):

@@ -26,6 +26,13 @@ and leaves ended orders alone.
 The live run directory is ``RunRecorder``'s run directory, rewritten whole
 from its journal by ``outputs.LiveRecorder`` each step. A dry run decides and
 reports the orders and writes nothing.
+
+``decide`` also keeps the account's Account history
+(``quantlab_ibkr.account_history``, ADR 0012): a real decide from a live run
+directory whose strategy segment another directory has taken over is refused
+before any connection, and the first real submission of a directory (an
+order adopted on its first day included) begins its segment on t and ends
+the previous one at the bar before t.
 """
 
 from __future__ import annotations
@@ -43,6 +50,7 @@ from nautilus_trader.config import StrategyConfig
 from quantlab.runs.live_predictions import LivePredictionStore
 from quantlab.runs.record import DataRecorder
 from quantlab_ibkr._support.jsonable import jsonable, python_scalar
+from quantlab_ibkr.account_history import AccountHistory
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.base.venue import Loop, NextOpenOrder, ReplayRequest
 from quantlab_ibkr.decision import DecisionCycle
@@ -270,8 +278,11 @@ def decide(
     ------
     ValueError
         If the config cannot trade live, the account is refused (paper
-        guard), or the day decides after its order deadline
-        (``OrderDeadlinePassed``).
+        guard), the day decides after its order deadline
+        (``OrderDeadlinePassed``), or the live run directory's strategy
+        segment has been taken over by another directory
+        (``account_history.TakenOver``; a real decide only, refused before
+        any connection).
 
     Examples
     --------
@@ -288,7 +299,10 @@ def decide(
         return DecideResult(t, recorder.live_dir, "already_recorded")
     account = venue_config.account()  # the paper guard, before any connection
     working: tuple[IbkrOrderState, ...] = ()
+    history = None
     if not venue_config.dry_run:
+        history = AccountHistory.of(venue_config)
+        history.check(recorder.live_dir, t)  # one strategy per account, before any order
         with _reports(venue_config, order_reports) as reports:
             working = tuple(
                 order for order in reports.open_orders(account)
@@ -359,6 +373,18 @@ def decide(
         )
     if venue.timed_out:
         recorder.add_event({"type": "timed_out", "timestamp": day})
+    # Before the directory is written: a failure here leaves t unrecorded, so a rerun adopts
+    # the working orders and begins the segment then (after the write it would find t
+    # already recorded and never begin it).
+    if (venue.submitter.submitted or venue.submitter.adopted) and not history.is_current(
+        recorder.live_dir
+    ):  # adopted: a first day's rerun
+        current = history.current  # check() refused a t on or before its first bar
+        previous = (
+            None if current is None
+            else run.price_dataset.calendar(current.first, t).drop(t, errors="ignore")[-1]
+        )
+        history.begin(recorder.live_dir, t, previous_bar=previous)
     recorder.write(report)
     return result
 

@@ -23,6 +23,13 @@ flags given with a file override its fields. Credentials never pass here:
 the account is ``TWS_ACCOUNT`` unless the config names it, and the Gateway
 holds the login. The live modules, and nautilus's IB adapter, are imported
 only by this command.
+
+``quantlab-ibkr live history show ACCOUNT [--history-dir DIR]`` prints the
+account's Account history (``quantlab_ibkr.account_history``): its strategy
+segments, oldest first, or that it has none. ``DIR`` is the directory the
+live configs keep the histories in, ``$QUANTLAB_DATA_DIR/live`` by default
+(refused when neither is given), beside the live run directories
+``<root>/live/<strategy>/ibkr``.
 """
 
 from __future__ import annotations
@@ -30,6 +37,7 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import json
+import os
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -86,6 +94,14 @@ def _parser() -> argparse.ArgumentParser:
             "--after-open", action="store_true", default=None,
             help="the opening auction was missed: day market orders 09:30-15:50 instead of MOO",
         )
+    history = steps.add_parser("history", help="the account's strategy segments (ADR 0012)")
+    actions = history.add_subparsers(dest="action", required=True)
+    show = actions.add_parser("show", help="print an account's history")
+    show.add_argument("account", help="the IBKR account id")
+    show.add_argument(
+        "--history-dir", default=None,
+        help="the directory holding the account histories (default: $QUANTLAB_DATA_DIR/live)",
+    )
     return parser
 
 
@@ -170,6 +186,10 @@ def _parity(args: argparse.Namespace) -> int:
     return 0
 
 
+#: The data root's environment variable (quantlab's); ``live history show`` looks in its
+#: ``live/`` directory by default.
+DATA_DIR_ENV = "QUANTLAB_DATA_DIR"
+
 #: Flags that override the IBKR venue's fields.
 _VENUE_FLAGS = {
     "prediction_store": "prediction_store",
@@ -212,6 +232,8 @@ def _live(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     """Run ``quantlab-ibkr live <step>``; return the exit status."""
     from quantlab_ibkr import live
 
+    if args.step == "history":
+        return _history(args)
     try:
         config = _live_config(parser, args)
         if args.step == "decide":
@@ -233,6 +255,25 @@ def _live(parser: argparse.ArgumentParser, args: argparse.Namespace) -> int:
     if recheck["bars_differing"]:
         print("quantlab-ibkr: the Decision recheck of the live run differs", file=sys.stderr)
         return 2
+    return 0
+
+
+def _history(args: argparse.Namespace) -> int:
+    """Run ``quantlab-ibkr live history show``; return the exit status."""
+    from quantlab_ibkr.account_history import AccountHistory
+
+    directory = args.history_dir
+    if directory is None:
+        root = os.environ.get(DATA_DIR_ENV)
+        if not root:
+            print(f"quantlab-ibkr: pass --history-dir or set {DATA_DIR_ENV}", file=sys.stderr)
+            return 1
+        directory = Path(root) / "live"
+    try:
+        print(AccountHistory(directory, args.account).summary())
+    except ValueError as error:
+        print(f"quantlab-ibkr: {error}", file=sys.stderr)
+        return 1
     return 0
 
 

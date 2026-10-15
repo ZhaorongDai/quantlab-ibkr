@@ -159,6 +159,11 @@ class IbkrVenueConfig(VenueConfig):
         have the orders accepted before it stops anyway (``timed_out``). It
         is also the node's connection timeout: the clients connect only once
         every resolved contract is loaded, about a minute per 1,000.
+    history_dir : str or None
+        The directory holding the account's Account history
+        (``quantlab_ibkr.account_history``); ``None`` is the parent of
+        ``live_dir``'s parent, the directory the strategies' directories
+        share.
 
     Raises
     ------
@@ -190,6 +195,7 @@ class IbkrVenueConfig(VenueConfig):
     max_orders_per_second: int = MAX_ORDERS_PER_SECOND
     timeout_secs: float = 300.0
     after_open: bool = False
+    history_dir: str | None = None
 
     def __post_init__(self):
         parse_deadline(self.order_deadline)
