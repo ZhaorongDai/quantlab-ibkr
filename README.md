@@ -99,7 +99,8 @@ Each weekday has two steps, each a short run; `recheck` and `brief` run on their
   directory is `<live_dir>/briefing/replay`, replaced each time, with `replay.json` recording
   its inputs and wall time. The figures add the segment's live and replayed returns, the
   cumulative return gap (live minus replay, in percentage points), the tracking error, the
-  unfilled orders and the cumulative fees, live and replayed. The command prints the replay's
+  unfilled orders and the cumulative fees of the orders decided before t (t's own fill at
+  t+1's open, after the close reported), live and replayed. The command prints the replay's
   wall time to standard error (logged as a warning past 15 minutes, the cue for an
   incremental replay); a replay that fails is stated in the briefing, which still builds.
 

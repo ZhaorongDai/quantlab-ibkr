@@ -91,12 +91,14 @@ class SegmentReplay:
         The annualised standard deviation of the per-bar live minus replay
         returns, in percent; NaN before two bars.
     unfilled_live, unfilled_replay : int
-        The segment's orders that did not fill
-        (``metrics.UNFILLED_STATUSES``). t's own orders are still working
-        live (they fill at t+1's open), and the replay, whose window ends at
-        t, never decides t, so neither side counts them.
+        The segment's orders decided before t that did not fill
+        (``metrics.UNFILLED_STATUSES``). t's own orders fill at t+1's open,
+        after the close the briefing reports (the record step may already
+        have recorded them), and the replay, whose window ends at t, never
+        decides t, so neither side counts them (#73).
     fees_live, fees_replay : float
-        The segment's cumulative fees in dollars.
+        The cumulative fees in dollars of the segment's orders decided
+        before t, as for the unfilled orders.
     seconds : float
         The replay's wall time.
 
@@ -271,8 +273,8 @@ def replay_segment(
         live_returns, replay_returns, bar_interval=bar_interval, year_freq=year_freq,
         ranges=[(bar_label(start), bar_label(end))],
     )
-    unfilled_live, fees_live = _orders(live_dir, start)
-    unfilled_replay, fees_replay = _orders(target, start)
+    unfilled_live, fees_live = _orders(live_dir, start, end)
+    unfilled_replay, fees_replay = _orders(target, start, end)
     return SegmentReplay(
         start=start,
         end=end,
@@ -379,10 +381,15 @@ def _held(live_dir: Path, t: pd.Timestamp) -> int:
     return int(np.count_nonzero(np.isfinite(row) & (row != 0.0)))
 
 
-def _orders(run_dir: Path, start: pd.Timestamp) -> tuple[int, float]:
-    """The unfilled orders and the fees of the orders decided from ``start`` on."""
+def _orders(run_dir: Path, start: pd.Timestamp, end: pd.Timestamp) -> tuple[int, float]:
+    """The unfilled orders and the fees of the orders decided from ``start`` to before ``end``.
+
+    An order decided on ``end`` (t) fills at t+1's open, after the close the
+    briefing reports, and the replay never decides t (#73).
+    """
     with xr.open_zarr(run_dir / "orders.zarr") as orders:
-        decided = pd.DatetimeIndex(orders["decision_date"].values) >= start
+        dates = pd.DatetimeIndex(orders["decision_date"].values)
+        decided = (dates >= start) & (dates < end)
         status = orders["status"].values[decided]
         fees = np.asarray(orders["fee"].values[decided], dtype=float)
     return int(np.isin(status, UNFILLED_STATUSES).sum()), float(np.nansum(fees))

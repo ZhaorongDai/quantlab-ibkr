@@ -10,7 +10,10 @@ Pro Fixed (the closed-loop backtest's default fee model). Locked:
   own panel;
 - rerunning the briefing replaces the replay's directory and leaves the live
   run directory's own files unchanged;
-- a segment that did not start from an empty account is stated.
+- a segment that did not start from an empty account is stated;
+- the live side counts the unfilled orders and fees of the orders decided
+  before t only, as the replay (which never decides t) does: t's orders fill
+  at t+1's open, after the close the briefing reports (#73).
 """
 
 import json
@@ -229,3 +232,21 @@ def test_a_failed_replay_is_stated_and_the_briefing_still_builds(tmp_path, monke
     assert "no prediction row" in dict(brief.rows)["回放 (Replay)"]
     assert "replay_cumulative_return" not in brief.curve
     assert not (day.live_dir / segment_replay.BRIEFING_DIR / segment_replay.REPLAY_DIR).exists()
+
+
+def test_the_live_side_leaves_out_the_orders_decided_on_t(tmp_path):
+    # Bar 9 rebalances: its orders fill at bar 10's open and are recorded, but
+    # the last marked bar is still 9, so the briefing of t = 9 must not count them.
+    day = _day(tmp_path)
+    day.trade(range(FIRST, 10))
+    t = day.bars[9]
+    orders = _zarr(day.live_dir / "orders.zarr")
+    decided = pd.DatetimeIndex(orders["decision_date"].values)
+    assert (decided == t).any() and np.nansum(orders["fee"].values[decided == t]) > 0
+    before = float(np.nansum(orders["fee"].values[decided < t]))
+
+    replay = briefing.close_briefing(day.config).replay
+    assert replay.end == t
+    assert replay.fees_live == pytest.approx(before, abs=1e-9)
+    assert replay.fees_live == pytest.approx(replay.fees_replay, abs=1e-9)
+    assert replay.unfilled_live == replay.unfilled_replay == 0
