@@ -13,7 +13,8 @@ appended t's row to the live prediction store:
 - ``record`` (after the open): reads IBKR's executions, open and completed
   orders, appends the fills of the orders still working (each IBKR execution
   once) and ends the ones IBKR canceled or expired, rewrites the directory's
-  files and runs the Decision recheck on it (``recheck``).
+  files and runs the Decision recheck on the bars decided since the last
+  recheck (``recheck`` with ``after``; ``live recheck`` rechecks them all).
 
 Both are idempotent. ``decide`` on a bar already recorded does nothing, and
 an order IBKR already has working for t (an earlier run that failed before
@@ -36,6 +37,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
+import xarray as xr
 from nautilus_trader.config import StrategyConfig
 
 from quantlab.runs.live_predictions import LivePredictionStore
@@ -369,7 +371,13 @@ def record(config: TraderConfig, *, order_reports: OrderReports | None = None) -
     fills (each execution id once), an order IBKR completed without filling
     it whole is ended with IBKR's status and reason, one still open stays
     working. The directory's files are written again and the Decision
-    recheck runs on it (``RECHECK_FILE``).
+    recheck runs on the bars decided after the last bar the previous
+    recheck covered (``RECHECK_FILE``'s ``last_bar``): a bar is rechecked
+    once, by the record step of its day, against the data it was decided
+    from. A store rebuilt later (a vendor correction, a new masking rule)
+    can change a past bar's inputs, and rechecking it every day would fail
+    every record step from then on; ``recheck`` on its own still rechecks
+    every bar.
 
     Parameters
     ----------
@@ -419,7 +427,7 @@ def record(config: TraderConfig, *, order_reports: OrderReports | None = None) -
             else:
                 unknown.append(ref)
     recorder.write()
-    result = recheck(config, run=run)
+    result = recheck(config, run=run, after=_last_rechecked(recorder.live_dir))
     return RecordResult(
         recorder.live_dir, fills, tuple(ended), tuple(still), tuple(unknown), result
     )
@@ -444,17 +452,30 @@ def _add_fills(
     return recorder.fill_count() - before
 
 
-def recheck(config: TraderConfig, *, run: QuantlabRun | None = None) -> dict:
+def recheck(
+    config: TraderConfig, *, run: QuantlabRun | None = None, after: pd.Timestamp | None = None
+) -> dict:
     """Run the Decision recheck on the live run directory and write it there.
 
     Each decided bar is decided again from the live prediction store's row,
     the symbols the day left out masked, and the current weights recorded as
-    handed to the rule; the result is written to ``RECHECK_FILE``.
+    handed to the rule; the result is written to ``RECHECK_FILE`` with
+    ``last_bar``, the last bar any recheck of the directory has covered.
+
+    Parameters
+    ----------
+    config : TraderConfig
+        The live config.
+    run : QuantlabRun, optional
+        The loaded quantlab run; loaded from the config by default.
+    after : pandas.Timestamp, optional
+        Recheck only the bars decided after it (the record step's new
+        bars); every decided bar by default.
 
     Returns
     -------
     dict
-        ``decision_recheck``'s result.
+        ``decision_recheck``'s result and ``last_bar``.
 
     Examples
     --------
@@ -468,8 +489,21 @@ def recheck(config: TraderConfig, *, run: QuantlabRun | None = None) -> dict:
     run = run or QuantlabRun.load(config.quantlab_run)
     live_dir = Path(venue_config.live_dir)
     result = decision_recheck(
-        run, live_dir, predictions=LivePredictionStore(venue_config.prediction_store)
+        run, live_dir, predictions=LivePredictionStore(venue_config.prediction_store), after=after
     )
+    with xr.open_zarr(live_dir / "decisions.zarr") as decisions:
+        decided = pd.DatetimeIndex(decisions["timestamp"].values)
+    last = decided.max() if len(decided) else after
+    result["last_bar"] = None if last is None or pd.isna(last) else str(pd.Timestamp(last).date())
     (live_dir / RECHECK_FILE).write_text(json.dumps(jsonable(result), indent=2))
     return result
+
+
+def _last_rechecked(live_dir: Path) -> pd.Timestamp | None:
+    """The last bar a recheck of ``live_dir`` covered (``RECHECK_FILE``'s ``last_bar``), if any."""
+    path = Path(live_dir) / RECHECK_FILE
+    if not path.is_file():
+        return None
+    last = json.loads(path.read_text()).get("last_bar")
+    return None if last is None else pd.Timestamp(last)
 

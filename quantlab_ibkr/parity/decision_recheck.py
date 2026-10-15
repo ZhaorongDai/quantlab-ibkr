@@ -40,6 +40,7 @@ def decision_recheck(
     closed_dir: Path,
     *,
     predictions: LivePredictionStore | Callable[[pd.Timestamp], xr.Dataset] | None = None,
+    after: pd.Timestamp | None = None,
 ) -> dict:
     """Run the Decision recheck of the closed-loop run in ``closed_dir``.
 
@@ -54,6 +55,9 @@ def decision_recheck(
         Where each bar's prediction row comes from: the live prediction
         store a live run decided from, or ``row(t) -> xarray.Dataset``;
         ``None`` is the run's prediction panel.
+    after : pandas.Timestamp, optional
+        Recheck only the bars decided after it (the live record step's new
+        bars); every decided bar by default.
 
     Returns
     -------
@@ -87,6 +91,8 @@ def decision_recheck(
         if e.get("type") == "excluded_symbols":
             excluded.setdefault(pd.Timestamp(e["timestamp"]), []).extend(e["symbols"])
     timestamps = pd.DatetimeIndex(decisions["timestamp"].values)
+    if after is not None:
+        timestamps = timestamps[timestamps > pd.Timestamp(after)]
     if not len(timestamps):
         return {"bars_checked": 0, "bars_differing": 0, "differing_bars": []}
     targets = ConstructorTargets(run.decision_inputs())

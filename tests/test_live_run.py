@@ -31,6 +31,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import xarray as xr
+import zarr
 from ibapi.tag_value import TagValue
 from nautilus_trader.accounting.factory import AccountFactory
 from nautilus_trader.adapters.interactive_brokers.common import IBContract, IBContractDetails
@@ -393,6 +394,28 @@ def test_rerunning_decide_and_record_is_idempotent(day):
     xr.testing.assert_identical(_zarr(day.live_dir / "orders.zarr"), after)
     journal = json.loads((day.live_dir / "journal.json").read_text())
     assert len(journal["fills"]) == 2
+
+
+def test_record_rechecks_only_the_bars_decided_since_the_last_recheck(day):
+    # Bar 6 is decided and rechecked by its record; then its inputs change under it, as a
+    # vendor store rebuilt from its first year changes the history a past day decided from.
+    day.trade(range(FIRST, 9))
+    with xr.open_zarr(day.store.path) as store:
+        k = int(np.flatnonzero(store["timestamp"].values == day.bars[6])[0])
+        reversed_row = -store["ret_5"].isel(timestamp=k).values
+    zarr.open_group(str(day.store.path), mode="r+")["ret_5"][k, :] = reversed_row
+    full = live.recheck(day.config)
+    assert full["bars_checked"] == 1 and full["bars_differing"] == 1
+
+    day.decide(9)
+    day.broker.open_auction(10)
+    recorded = day.record()
+    assert recorded.recheck["bars_checked"] == 1 and recorded.recheck["bars_differing"] == 0
+    written = json.loads((day.live_dir / live.RECHECK_FILE).read_text())
+    assert written["last_bar"] == str(day.bars[9].date())
+    again = day.record()
+    assert again.recheck["bars_checked"] == 0 and again.recheck["bars_differing"] == 0
+    assert live.recheck(day.config)["bars_differing"] == 1  # the whole run, on demand
 
 
 def test_an_order_ibkr_cancels_at_the_open_is_recorded_unfilled_with_its_reason(day):

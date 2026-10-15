@@ -40,11 +40,14 @@ Each weekday has two steps, each a short run:
 - `quantlab-ibkr live record CONFIG.json` (after the open, the same day). It reads IBKR's
   executions, open orders and completed orders, adds the fills of the orders still working,
   ends the orders IBKR canceled or expired with IBKR's reason, and rewrites the live run
-  directory. Then it runs the Decision recheck on that directory. The command exits with 2
-  when the recheck differs.
-- `quantlab-ibkr live recheck CONFIG.json` runs the Decision recheck alone, and writes
-  `decision_recheck.json`. Each decided bar is decided again from the live store's row, with
-  the recorded current weights. The result must equal the decision bit for bit.
+  directory. Then it runs the Decision recheck on the bars decided since the last recheck
+  (`last_bar` in `decision_recheck.json`), so each bar is rechecked once, by its own day's
+  record, against the data it was decided from; a store rebuilt later would otherwise fail
+  every record from then on. The command exits with 2 when the recheck differs.
+- `quantlab-ibkr live recheck CONFIG.json` runs the Decision recheck alone on every decided
+  bar, and writes `decision_recheck.json`. Each decided bar is decided again from the live
+  store's row, with the recorded current weights. The result must equal the decision bit for
+  bit.
 
 The config is a `TraderConfig` JSON file whose venue is an `IbkrVenueConfig`. Flags given
 with the file override its venue fields: `--dry-run`, `--host`, `--port`, `--client-id`,
