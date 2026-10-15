@@ -13,7 +13,9 @@ The briefing carries:
   first marked bar: the live curve's cumulative return, the benchmark's and
   the live curve's drawdown;
 - ``day``: t's return, PnL in dollars, the benchmark's return on t and the
-  excess (``DayFigures``);
+  excess (``DayFigures``), the account's when there is an account history, so
+  a switch day (named in ``DayFigures.switch``) shows the account's move across
+  the switch (#70);
 - ``segment``: the strategy segment's figures (``SegmentFigures``), quantlab's
   ``return_stats`` and ``relative_stats`` of the equity's returns and the
   benchmark's, so they agree with ``metrics.json``; the annualised return and
@@ -117,7 +119,8 @@ class DayFigures:
     Attributes
     ----------
     return_pct : float
-        t's return of the live curve.
+        t's return of the account (of the live curve without an account
+        history).
     pnl : float
         t's change of the account's value, in dollars.
     benchmark_return_pct : float or None
@@ -126,6 +129,9 @@ class DayFigures:
     excess_pct : float or None
         ``(1 + r) / (1 + b) - 1``, the geometric excess of t, as quantlab's
         ``Excess Return [%]`` compounds it.
+    switch : str or None
+        The strategy that took the account over on t, when t is a strategy
+        switch; the figures are then the account's across the switch (#70).
 
     Examples
     --------
@@ -137,6 +143,7 @@ class DayFigures:
     pnl: float
     benchmark_return_pct: float | None
     excess_pct: float | None
+    switch: str | None = None
 
 
 @dataclass(frozen=True)
@@ -451,24 +458,15 @@ def close_briefing(config: TraderConfig) -> CloseBriefing:
 
     curve = _curve(equity, benchmark)
     segment = _figures(curve, returns, benchmark, bar_interval, year_freq)
-    r = float(returns.values[-1])
-    b = None if benchmark is None else float(benchmark.returns.values[-1])
-    value = np.asarray(equity["value"].values, dtype=float)
-    day = DayFigures(
-        return_pct=r * 100.0,
-        pnl=float(value[-1] - value[-2]) if len(value) > 1 else 0.0,
-        benchmark_return_pct=None if b is None else b * 100.0,
-        excess_pct=None if b is None else ((1.0 + r) / (1.0 + b) - 1.0) * 100.0,
-    )
     t = timestamps[-1]
     name = live_dir.resolve().parent.name
     symbol = None if benchmark is None else (benchmark.symbol or "基准")
-    sections = _sections(t, symbol, day, segment)
     history = _account_history(config, live_dir, t)
     account = account_curve = None
     segments, switches = (), ()
     if history is None:
-        sections = _after_segment(sections, (SINGLE_SEGMENT_NOTE, ()))
+        day = _day(equity, benchmark)
+        after_segment = (SINGLE_SEGMENT_NOTE, ())
     else:
         segments, account_equity = history
         switches = tuple((s.first, s.strategy) for s in segments[1:])
@@ -480,9 +478,15 @@ def close_briefing(config: TraderConfig) -> CloseBriefing:
         account = _figures(
             account_curve, account_equity["returns"], account_benchmark, bar_interval, year_freq
         )
-        sections = _after_segment(
-            sections, _account_section(symbol, account, len(segments), switches)
-        )
+        # t's figures are the account's: on a switch day the directory's own
+        # first return is 0, while the account moved from the last segment's mark.
+        # The current segment's first account bar (never empty: _account_history
+        # refuses a segment without a marked bar in its span).
+        current_start = account_bars[account_bars >= segments[-1].first][0]
+        switch = segments[-1].strategy if len(segments) > 1 and current_start == t else None
+        day = _day(account_equity, account_benchmark, switch)
+        after_segment = _account_section(symbol, account, len(segments), switches)
+    sections = _after_segment(_sections(t, symbol, day, segment), after_segment)
     book = _book(config, run, live_dir, equity)
     sections = sections + _book_sections(book)
     replay, replay_failure = _replay(config, run, live_dir, timestamps)
@@ -511,6 +515,20 @@ def close_briefing(config: TraderConfig) -> CloseBriefing:
         book=book,
         replay=replay,
         replay_failure=replay_failure,
+    )
+
+
+def _day(equity: xr.Dataset, benchmark: BenchmarkRecord | None, switch: str | None = None) -> DayFigures:
+    """The figures of ``equity``'s last bar against ``benchmark`` on the same bars."""
+    r = float(equity["returns"].values[-1])
+    b = None if benchmark is None else float(benchmark.returns.values[-1])
+    value = np.asarray(equity["value"].values, dtype=float)
+    return DayFigures(
+        return_pct=r * 100.0,
+        pnl=float(value[-1] - value[-2]) if len(value) > 1 else 0.0,
+        benchmark_return_pct=None if b is None else b * 100.0,
+        excess_pct=None if b is None else ((1.0 + r) / (1.0 + b) - 1.0) * 100.0,
+        switch=switch,
     )
 
 
@@ -642,6 +660,11 @@ _pct, _level, _ratio, _dollars = (
 )
 
 
+def _took_over(strategy: str) -> str:
+    """The switch day's row: the strategy that took the account over."""
+    return f"{strategy} 接手账户"
+
+
 def _depth(value: float) -> str:
     """A drawdown, positive, in percent; NaN (no drawdown yet) as 0."""
     return f"{0.0 if np.isnan(value) else value:.2f}%"
@@ -658,6 +681,7 @@ def _sections(t, symbol, day: DayFigures, segment: SegmentFigures) -> tuple:
         (
             f"当日 ({t.date()})",
             rows(
+                ("策略切换日 (Switch day)", day.switch, _took_over),
                 ("当日收益 (Return)", day.return_pct, _pct),
                 ("当日盈亏 (PnL)", day.pnl, _dollars),
                 (f"基准当日收益 ({symbol})", day.benchmark_return_pct, _pct),

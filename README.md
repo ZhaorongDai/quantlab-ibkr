@@ -63,13 +63,15 @@ Each weekday has two steps, each a short run; `recheck` and `brief` run on their
   from 60 bars on. The chart and a second column of the same figures cover the whole
   **Account history** (below) up to the directory's own segment: the account's returns are each
   segment's equity-record returns over its own span (the first segment from its first marked
-  bar, each later one from its first decision date), concatenated in history order, with a later
-  segment's first return taken from its first mark over the previous segment's last so the
-  curve is continuous at a switch; the curve is rebased to the account's first marked bar, the
-  benchmark to the same bar, and each strategy switch is a dashed line labelled with the new
-  strategy. Without a history, or one that does not name the directory, the briefing shows the
-  single segment and says so; a segment whose equity record is missing is refused, naming its
-  directory. The book follows: t's turnover (quantlab's
+  bar, each later one from its first decision date), concatenated in history order, with a
+  later segment's first return taken from its first mark over the previous segment's last so
+  the curve is continuous at a switch; the curve is rebased to the account's first marked bar,
+  the benchmark to the same bar, and each strategy switch is a dashed line labelled with the
+  new strategy. With a history, t's day figures are the account's, so on a switch day (stated
+  as such) they show the account's move from the previous segment's last mark, not the new
+  directory's first return of 0. Without a history, or one that does not name the directory,
+  the briefing shows the single segment and says so; a segment whose equity record is missing
+  is refused, naming its directory. The book follows: t's turnover (quantlab's
   `backtest_stats.turnover` of the fills at t's open, as `metrics.json` sums it) and filled
   orders; the turnover of t's own decision (`sum |weight - current_weight|`, filling at t+1's
   open) and the orders decided on t; the holdings count and cash weight at t's close (`holdings.zarr`); the five largest holdings;

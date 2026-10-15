@@ -16,10 +16,14 @@ bar. Locked:
   account's bars; the segment figures are the current directory's alone;
 - no history, or a directory not in it, falls back to the single-segment
   briefing and says so;
-- a segment whose equity record is missing is refused, naming its directory.
+- a segment whose equity record is missing is refused, naming its directory;
+- on a switch day the day figures are the account's (its move from the first
+  directory's last mark), stated as a switch day; on the segment's later bars
+  they equal the directory's own (#70).
 """
 
 import dataclasses
+import html
 import re
 
 import numpy as np
@@ -145,6 +149,7 @@ def test_no_history_or_a_directory_not_in_it_falls_back_to_the_single_segment_br
         assert briefing.SINGLE_SEGMENT_NOTE in brief.text
         assert brief.segment.start == day.bars[SWITCH]
         assert not any(label.startswith("账户") for label, _ in brief.rows)
+        assert brief.day == _own_day(day)  # the directory's own, as #61 builds them
 
 
 def test_a_segment_without_an_equity_record_is_refused_naming_its_directory(day):
@@ -156,3 +161,73 @@ def test_a_segment_without_an_equity_record_is_refused_naming_its_directory(day)
             briefing.close_briefing(day.config)
     finally:
         aside.rename(record)
+
+
+def _own_day(day: Day) -> briefing.DayFigures:
+    """t's figures of the current directory's own equity record and the benchmark on its bars."""
+    equity = read_equity(day.live_dir)
+    timestamps = equity["timestamp"].values
+    b = benchmark_record(day.run.benchmark(timestamps[0], timestamps[-1]), timestamps).returns.values[-1]
+    r, value = equity["returns"].values[-1], equity["value"].values
+    return briefing.DayFigures(
+        return_pct=r * 100.0,
+        pnl=float(value[-1] - value[-2]),
+        benchmark_return_pct=b * 100.0,
+        excess_pct=((1.0 + r) / (1.0 + b) - 1.0) * 100.0,
+    )
+
+
+def _day_rows_in_both_bodies(brief) -> None:
+    """Every row of the day section is in the plain text and the HTML."""
+    title, rows = brief.sections[0]
+    assert title.startswith("当日")
+    for label, text in rows:
+        assert f"{label}: {text}" in brief.text
+        assert html.escape(label) in brief.html and html.escape(text) in brief.html
+
+
+def _switching(tmp_path) -> Day:
+    """``live/run`` to bar 8, then ``next/run`` takes over and has marked only the switch bar."""
+    day = Day(tmp_path, benchmark=BENCHMARK)
+    day.first_dir = day.live_dir
+    day.trade(range(FIRST, SWITCH))
+    day.config = dataclasses.replace(
+        day.config,
+        venue=dataclasses.replace(day.config.venue, live_dir=str(day.root / "next" / "run")),
+    )
+    day.trade([SWITCH])
+    return day
+
+
+def test_the_day_figures_of_a_switch_day_are_the_accounts(tmp_path):
+    day = _switching(tmp_path)
+    brief = briefing.close_briefing(day.config)
+    assert brief.t == day.bars[SWITCH]
+    before = read_equity(day.first_dir)["value"].values[-1]
+    after = read_equity(day.live_dir)["value"].values[-1]
+    assert read_equity(day.live_dir)["returns"].values[-1] == 0.0  # the directory's own first return
+    r = after / before - 1.0
+    assert r != 0.0
+    assert brief.day.return_pct == pytest.approx(r * 100.0, rel=1e-12)
+    assert brief.day.pnl == pytest.approx(after - before, rel=1e-9)
+    growth = 1.0 + brief.account_curve["cumulative_return"].values
+    assert brief.day.return_pct == pytest.approx((growth[-1] / growth[-2] - 1.0) * 100.0, rel=1e-9)
+    b = brief.day.benchmark_return_pct / 100.0
+    assert brief.day.excess_pct == pytest.approx(((1.0 + r) / (1.0 + b) - 1.0) * 100.0, rel=1e-12)
+    assert brief.day.switch == "next"
+    assert dict(brief.sections[0][1])["策略切换日 (Switch day)"] == "next 接手账户"
+    _day_rows_in_both_bodies(brief)
+
+
+def test_after_the_switch_day_the_day_figures_are_the_directorys_own(tmp_path):
+    day = _switching(tmp_path)
+    day.trade([SWITCH + 1])
+    brief = briefing.close_briefing(day.config)
+    equity = read_equity(day.live_dir)
+    assert brief.day.return_pct == pytest.approx(equity["returns"].values[-1] * 100.0, rel=1e-12)
+    value = equity["value"].values
+    assert brief.day.pnl == pytest.approx(value[-1] - value[-2], rel=1e-9)
+    assert brief.day == _own_day(day)  # benchmark and excess included
+    assert brief.day.switch is None
+    assert "策略切换日 (Switch day)" not in brief.text
+    _day_rows_in_both_bodies(brief)
