@@ -31,6 +31,8 @@ import pytest
 import xarray as xr
 
 from quantlab.factor.config import BaseFactorConfig
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
@@ -78,7 +80,7 @@ def _mean_variance(weight_cap=0.6):
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
             risk_aversion=5.0,
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             weight_cap=weight_cap,
         )
     )
@@ -318,7 +320,7 @@ def _declares_factors(root):
                 expected_return_label="ret_5",
                 covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
                 risk_aversion=5.0,
-                ic=0.05,
+                expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
                 exposure_factors=(
                     FixtureExposures(BaseFactorConfig(warmup_bars=0, dataset=dataset)),
                 ),

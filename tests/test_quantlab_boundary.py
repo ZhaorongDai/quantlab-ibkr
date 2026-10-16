@@ -40,6 +40,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
@@ -189,7 +191,7 @@ REPLAYS = {
                     expected_return_label="ret_5",
                     covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=3)),
                     risk_aversion=5.0,
-                    ic=0.05,
+                    expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
                 )
             ),
             4,

@@ -44,6 +44,8 @@ import pandas as pd
 import pytest
 import xarray as xr
 
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.portfolio.predefined.ledoit_wolf import LedoitWolfEstimator
@@ -425,7 +427,7 @@ def _mean_variance(min_trade=0.0):
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
             risk_aversion=5.0,
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             weight_cap=0.6,
             min_trade=min_trade,
         )
@@ -477,7 +479,7 @@ def test_a_mean_variance_rule_with_a_candidate_top_k_is_not_holding_independent(
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
             risk_aversion=5.0,
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             weight_cap=0.6,
             candidate_top_k=2,
         )
@@ -521,7 +523,7 @@ def _holding_dependent_mean_variance(weight_cap=0.6):
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=5)),
             risk_aversion=5.0,
-            ic=0.05,
+            expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
             weight_cap=weight_cap,
             turnover_penalty=0.002,
         )

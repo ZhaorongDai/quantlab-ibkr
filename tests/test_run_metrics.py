@@ -21,6 +21,8 @@ import pytest
 import xarray as xr
 
 from quantlab.runs import backtest_stats
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.config import LedoitWolfEstimatorConfig, MeanVarianceConfig, TopNConfig
 from quantlab.runs.prediction_panel import LabelSpec
 from quantlab.tracking.base import Tracker, TrackingRun
@@ -332,7 +334,7 @@ def test_closed_loop_held_bars_are_the_failed_bars(tmp_path):
         MeanVarianceConfig(
             expected_return_label="ret_5",
             covariance=LedoitWolfEstimator(LedoitWolfEstimatorConfig(lookback_bars=3)),
-            risk_aversion=5.0, ic=0.05, weight_cap=0.2,
+            risk_aversion=5.0, expected_return=GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)), weight_cap=0.2,
         )
     )
     quantlab_run, failed = build_constructor_run(

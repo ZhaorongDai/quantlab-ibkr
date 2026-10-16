@@ -55,6 +55,8 @@ from quantlab.backtest.predefined.us_equity import USEquityCrossectionSelectStoc
 from quantlab.backtest.predefined.weights import WeightsVectorBt
 from quantlab.backtest.config import CrossSectionBacktestConfig, WeightsBacktestConfig
 from quantlab.dataset.config import CrspDatasetConfig, DatasetConfig
+from quantlab.portfolio.config import GrinoldExpectedReturnConfig
+from quantlab.portfolio.predefined.expected_return import GrinoldExpectedReturn
 from quantlab.portfolio.base import PortfolioConstructor
 from quantlab.portfolio.config import FactorRiskStoreEstimatorConfig, MeanVarianceConfig
 from quantlab.portfolio.predefined.factor_risk import FactorRiskStoreEstimator
@@ -365,8 +367,9 @@ def build_factor_risk_run(
     covariance is a ``FactorRiskStoreEstimator`` of ``factor_risk_model``,
     with ``exposure_bounds`` on the risk model's exposures. The first label
     is the expected return; ``mean_variance`` holds the remaining
-    ``MeanVarianceConfig`` fields (``risk_aversion`` and ``ic`` default to
-    5 and 0.05) and ``build_constructor_run``'s keywords.
+    ``MeanVarianceConfig`` fields (``risk_aversion`` defaults to 5 and
+    ``expected_return`` to ``GrinoldExpectedReturn`` with ``ic`` 0.05) and
+    ``build_constructor_run``'s keywords.
     """
     root = Path(root)
     run_fields = {
@@ -374,7 +377,11 @@ def build_factor_risk_run(
         for k in ("rebalance_periods", "init_cash", "fees", "slippage")
         if k in mean_variance
     }
-    mean_variance = {"risk_aversion": 5.0, "ic": 0.05, **mean_variance}
+    mean_variance = {
+        "risk_aversion": 5.0,
+        "expected_return": GrinoldExpectedReturn(GrinoldExpectedReturnConfig(ic=0.05)),
+        **mean_variance,
+    }
 
     def rule(dataset):
         model = factor_risk_model(
