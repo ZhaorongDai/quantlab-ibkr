@@ -30,6 +30,7 @@ from quantlab.core.component import walk_components
 from quantlab.portfolio.base import Decision
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab_ibkr._support.jsonable import python_scalar
+from quantlab_ibkr.base.config import check_max_capital
 from quantlab_ibkr.base.venue import BarInputs, NextOpenOrder
 
 
@@ -93,39 +94,6 @@ def sizing_capital(equity: float, max_capital: float | None) -> float:
     (2000.0, 1000.0, 1000.0)
     """
     return float(equity) if max_capital is None else min(float(equity), float(max_capital))
-
-
-def check_max_capital(max_capital, owner: str) -> float | None:
-    """Return ``max_capital`` as a float, refusing anything but a positive finite number or ``None``.
-
-    A bool is refused, though Python counts it a number.
-
-    Raises
-    ------
-    ValueError
-        If ``max_capital`` is not ``None`` or a positive finite int or float.
-
-    Examples
-    --------
-    >>> check_max_capital(2000, "DecisionCycle")
-    2000.0
-    >>> check_max_capital(True, "DecisionCycle")
-    Traceback (most recent call last):
-    ...
-    ValueError: DecisionCycle.max_capital must be a positive number or None, got True
-    """
-    if max_capital is None:
-        return None
-    if (
-        isinstance(max_capital, bool)
-        or not isinstance(max_capital, (int, float))
-        or not math.isfinite(max_capital)
-        or max_capital <= 0
-    ):
-        raise ValueError(
-            f"{owner}.max_capital must be a positive number or None, got {max_capital!r}"
-        )
-    return float(max_capital)
 
 
 class TargetSource(ABC):

@@ -9,9 +9,8 @@ at run time (a venue config, a tracker), its import path under ``"name"``, and
 
 from __future__ import annotations
 
-import math
-
 import dataclasses
+import math
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -30,6 +29,40 @@ def _import_path(obj: Any) -> str:
     """Return ``module.QualName`` of ``obj``'s class."""
     cls = type(obj)
     return f"{cls.__module__}.{cls.__qualname__}"
+
+
+def check_max_capital(max_capital: Any, owner: str) -> float | None:
+    """Return ``max_capital`` as a float, refusing anything but a positive finite number or ``None``.
+
+    The one check of the cap ``TraderConfig`` and ``DecisionCycle`` take; a
+    bool is refused, though Python counts it a number.
+
+    Raises
+    ------
+    ValueError
+        If ``max_capital`` is not ``None`` or a positive finite int or float.
+
+    Examples
+    --------
+    >>> check_max_capital(2000, "DecisionCycle")
+    2000.0
+    >>> check_max_capital(True, "DecisionCycle")
+    Traceback (most recent call last):
+    ...
+    ValueError: DecisionCycle.max_capital must be a positive number or None, got True
+    """
+    if max_capital is None:
+        return None
+    if (
+        isinstance(max_capital, bool)
+        or not isinstance(max_capital, (int, float))
+        or not math.isfinite(max_capital)
+        or max_capital <= 0
+    ):
+        raise ValueError(
+            f"{owner}.max_capital must be a positive number or None, got {max_capital!r}"
+        )
+    return float(max_capital)
 
 
 @dataclass(frozen=True)
@@ -157,14 +190,9 @@ class TraderConfig:
     max_capital: float | None = None
 
     def __post_init__(self):
-        if self.max_capital is not None:
-            if isinstance(self.max_capital, bool) or not isinstance(self.max_capital, (int, float)) \
-                    or not math.isfinite(self.max_capital) or self.max_capital <= 0:
-                raise ValueError(
-                    f"TraderConfig.max_capital must be a positive number or None, "
-                    f"got {self.max_capital!r}"
-                )
-            object.__setattr__(self, "max_capital", float(self.max_capital))
+        object.__setattr__(
+            self, "max_capital", check_max_capital(self.max_capital, "TraderConfig")
+        )
         try:
             object.__setattr__(self, "loop", Loop(self.loop))
         except ValueError:
