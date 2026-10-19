@@ -445,6 +445,10 @@ class DecisionCycle:
         equity; the rest stays cash. The rule is handed current weights over
         the same capital, so it sees the strategy's book; the result keeps
         the account's equity and weights. ``None`` sizes on the whole equity.
+        A cap cut below what is held leaves a book summing above 1: the
+        rule is handed it as it is, every finite target is sized on the
+        capital and a name targeted at 0 is closed; a holding the rule keeps
+        (NaN) stays as it is.
 
     Examples
     --------

@@ -14,7 +14,8 @@ What is locked here (ADR 0003, ADR 0008):
   context unpredicted (tradable where the price dataset has a fill price);
 - ``max_capital`` sizes on ``min(equity, max_capital)`` and hands the rule
   its book's weights over that capital, while the result keeps the account's
-  equity and weights; a bool or a string cap is refused.
+  equity and weights; a bool or a string cap is refused; after a cap cut
+  below the holdings the book sums above 1 and sizing stays on the cap.
 """
 
 import math
@@ -340,3 +341,25 @@ def test_trader_config_max_capital_round_trips_and_defaults_to_none():
     assert TraderConfig("/runs/x", BacktestVenueConfig()).max_capital is None
     config = TraderConfig("/runs/x", BacktestVenueConfig(), max_capital=480772.47)
     assert TraderConfig.from_config(config.get_config()).max_capital == 480772.47
+
+
+def test_after_a_cap_cut_the_rule_sees_a_book_above_one_and_sizing_stays_on_the_cap():
+    # 10,000 account, 3,000 held, the cap cut to 2,000: the book is 1.5 of
+    # the capital and the rule sees it as it is. Sizing stays on 2,000: the
+    # out-of-target 10003 is closed, 10002 at its book weight is kept, 10001
+    # is bought at trunc(0.5 * 2000 / 20) = 50.
+    targets = _Seen(_table({T: {10001: 0.5, 10002: 0.5, 10003: 0.0}}))
+    cycle = DecisionCycle(targets, max_capital=2000.0)
+    result = cycle.run(
+        _inputs({10001: 20.0, 10002: 10.0, 10003: 10.0}),
+        positions={10002: 100, 10003: 200},
+        cash=7000.0,
+    )
+
+    assert targets.seen == {10002: 0.5, 10003: 1.0}
+    assert sum(targets.seen.values()) == 1.5
+    assert result.capital == 2000.0 and result.equity == 10000.0
+    assert result.orders == (
+        NextOpenOrder(10003, "SELL", 200, T),
+        NextOpenOrder(10001, "BUY", 50, T),
+    )
