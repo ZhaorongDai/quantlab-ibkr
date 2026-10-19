@@ -413,6 +413,11 @@ class DecisionCycle:
     ----------
     targets : TargetSource
         Where the bar's target weights come from.
+    max_capital : float or None, default None
+        Size the targets on ``min(equity, max_capital)`` instead of the whole
+        equity; the rest stays cash. Current weights are taken over the same
+        capital, so the rule sees the strategy's book. ``None`` sizes on the
+        whole equity.
 
     Examples
     --------
@@ -424,8 +429,11 @@ class DecisionCycle:
     (NextOpenOrder(permno=10001, side='BUY', quantity=33, decision_date=Timestamp('2024-01-03 00:00:00')),)
     """
 
-    def __init__(self, targets: TargetSource):
+    def __init__(self, targets: TargetSource, max_capital: float | None = None):
+        if max_capital is not None and not (math.isfinite(max_capital) and max_capital > 0):
+            raise ValueError(f"DecisionCycle.max_capital must be positive, got {max_capital!r}")
         self.targets = targets
+        self.max_capital = max_capital
 
     def run(
         self,
@@ -447,7 +455,8 @@ class DecisionCycle:
         Returns
         -------
         CycleResult
-            The decision, the orders (sells first), equity and current weights.
+            The decision, the orders (sells first), equity and current weights;
+            with ``max_capital`` the equity is the capital sized on.
 
         Raises
         ------
@@ -481,6 +490,8 @@ class DecisionCycle:
                 f"DecisionCycle at {inputs.timestamp.date()}: equity {equity} is "
                 f"not positive; there is nothing to size targets against"
             )
+        if self.max_capital is not None:
+            equity = min(equity, self.max_capital)
         current_weights = pd.Series(
             {p: q * float(close[p]) / equity for p, q in held.items()}, dtype=float
         )

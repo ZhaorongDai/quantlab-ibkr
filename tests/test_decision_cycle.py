@@ -265,3 +265,49 @@ def test_a_hold_keeps_every_holding():
 
     assert result.decision.failure == "infeasible"
     assert result.orders == ()
+
+
+def test_max_capital_sizes_targets_on_the_cap_and_still_closes_non_targets():
+    # equity = 9000 cash + 100 * 10 = 10000, capped at 2000: 10001 at 0.5 ->
+    # trunc(0.5 * 2000 / 20) = 50; 10003 (held, target 0) is closed; the rest is cash.
+    cycle = DecisionCycle(TableTargets(_table({T: {10001: 0.5, 10003: 0.0}})), max_capital=2000.0)
+    result = cycle.run(_inputs({10001: 20.0, 10003: 10.0}), positions={10003: 100}, cash=9000.0)
+
+    assert result.equity == 2000.0
+    assert result.current_weights.to_dict() == {10003: 0.5}
+    assert result.orders == (
+        NextOpenOrder(10003, "SELL", 100, T),
+        NextOpenOrder(10001, "BUY", 50, T),
+    )
+
+
+def test_max_capital_above_equity_sizes_on_equity():
+    cycle = DecisionCycle(TableTargets(_table({T: {10001: 1.0}})), max_capital=1e9)
+    result = cycle.run(_inputs({10001: 10.0}), positions={}, cash=1000.0)
+
+    assert result.equity == 1000.0
+    assert result.orders == (NextOpenOrder(10001, "BUY", 100, T),)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan])
+def test_max_capital_must_be_positive(bad):
+    with pytest.raises(ValueError, match="max_capital"):
+        DecisionCycle(TableTargets(_table({T: {10001: 1.0}})), max_capital=bad)
+
+
+@pytest.mark.parametrize("bad", [0, -5.0, "100", True, math.inf])
+def test_trader_config_refuses_a_non_positive_max_capital(bad):
+    from quantlab_ibkr.base.config import TraderConfig
+    from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
+
+    with pytest.raises(ValueError, match="max_capital"):
+        TraderConfig("/runs/x", BacktestVenueConfig(), max_capital=bad)
+
+
+def test_trader_config_max_capital_round_trips_and_defaults_to_none():
+    from quantlab_ibkr.base.config import TraderConfig
+    from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
+
+    assert TraderConfig("/runs/x", BacktestVenueConfig()).max_capital is None
+    config = TraderConfig("/runs/x", BacktestVenueConfig(), max_capital=480772.47)
+    assert TraderConfig.from_config(config.get_config()).max_capital == 480772.47

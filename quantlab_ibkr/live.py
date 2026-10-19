@@ -318,7 +318,7 @@ def decide(
     targets = venue.targets()
     strategy = PortfolioStrategy(
         venue=venue,
-        cycle=DecisionCycle(targets),
+        cycle=DecisionCycle(targets, max_capital=config.max_capital),
         recorder=recorder,
         config=StrategyConfig(order_id_tag=decision_tag(t)),
     )

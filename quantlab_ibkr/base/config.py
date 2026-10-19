@@ -9,6 +9,8 @@ at run time (a venue config, a tracker), its import path under ``"name"``, and
 
 from __future__ import annotations
 
+import math
+
 import dataclasses
 from abc import ABC, abstractmethod
 from collections.abc import Mapping
@@ -130,6 +132,11 @@ class TraderConfig:
     name : str or None
         Prefix of the run directory's name; ``None`` uses the quantlab run
         directory's name.
+    max_capital : float or None
+        The most capital the strategy trades: each bar's target book is
+        sized on ``min(account equity, max_capital)`` and the rest stays
+        cash; holdings outside the targets are still closed. ``None`` sizes
+        on the whole account equity.
 
     Examples
     --------
@@ -147,8 +154,17 @@ class TraderConfig:
     output_dir: str | None = None
     tracker: Tracker | None = None
     name: str | None = None
+    max_capital: float | None = None
 
     def __post_init__(self):
+        if self.max_capital is not None:
+            if isinstance(self.max_capital, bool) or not isinstance(self.max_capital, (int, float)) \
+                    or not math.isfinite(self.max_capital) or self.max_capital <= 0:
+                raise ValueError(
+                    f"TraderConfig.max_capital must be a positive number or None, "
+                    f"got {self.max_capital!r}"
+                )
+            object.__setattr__(self, "max_capital", float(self.max_capital))
         try:
             object.__setattr__(self, "loop", Loop(self.loop))
         except ValueError:
