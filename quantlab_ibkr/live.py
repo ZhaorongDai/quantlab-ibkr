@@ -282,7 +282,8 @@ def decide(
         (``OrderDeadlinePassed``), or the live run directory's strategy
         segment has been taken over by another directory
         (``account_history.TakenOver``; a real decide only, refused before
-        any connection).
+        any connection), or orders found working at IBKR for t were sized
+        under another ``max_capital`` (``LiveRecorder.check_adoption``).
 
     Examples
     --------
@@ -308,6 +309,9 @@ def decide(
                 order for order in reports.open_orders(account)
                 if decision_date_of(order.order_ref) == t
             )
+        if working:  # adopted by symbol and side: refused when sized under another cap
+            recorder.check_adoption(t)
+        recorder.mark_submitting(t)
     build = venue_factory or venue_config.build
     venue = build(
         run,

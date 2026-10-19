@@ -22,7 +22,8 @@ fraction, reported back as IBKR executions and completed orders). Locked:
 - the command line builds the live config from a file and flags;
 - with ``max_capital`` the equity and holdings recorded are the account's,
   the decisions' current weights the capped book's, and each cycle keeps its
-  cap in the journal.
+  cap in the journal; orders working at IBKR that were sent under another
+  cap are not adopted.
 """
 
 import dataclasses
@@ -559,3 +560,28 @@ def test_max_capital_records_the_account_and_the_cap_of_each_cycle(day):
     again.restore(recorder.state())
     assert again.state() == RunRecorder.state(recorder)
 
+
+def test_working_orders_sized_under_another_max_capital_are_not_adopted(day):
+    cap = day.run.init_cash / 4
+    _capped(day, cap)
+    day.trade(range(FIRST, 6))
+    rebalance = 6
+    assert len(day.decide(rebalance).submitted) == 2
+    sent = day.broker.received
+    # The run sent its orders and failed before recording them.
+    journal = json.loads((day.live_dir / "journal.json").read_text())
+    journal["cycles"] = journal["cycles"][:-1]
+    journal["orders"] = []
+    journal["events"] = []
+    (day.live_dir / "journal.json").write_text(json.dumps(journal))
+
+    _capped(day, cap / 2)
+    with pytest.raises(ValueError, match="max_capital"):
+        day.decide(rebalance)
+    assert day.broker.received == sent
+    assert not LiveRecorder(day.config, day.run).has_cycle(day.bars[rebalance])
+
+    _capped(day, cap)
+    adopted = day.decide(rebalance)
+    assert len(adopted.adopted) == 2 and adopted.submitted == ()
+    assert day.broker.received == sent
