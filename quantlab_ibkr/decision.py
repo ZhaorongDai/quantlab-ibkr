@@ -46,9 +46,12 @@ class CycleResult:
     orders : tuple of NextOpenOrder
         The sized orders, sells first.
     equity : float
-        Cash plus every holding at t's raw close.
+        The account's equity: cash plus every holding at t's raw close.
     current_weights : pandas.Series
-        Each holding's close value over equity, per PERMNO.
+        Each holding's close value over the account's equity, per PERMNO.
+    max_capital : float or None
+        The cap the cycle sized on (``DecisionCycle.max_capital``); ``None``
+        sized on the whole equity.
 
     Examples
     --------
@@ -67,6 +70,62 @@ class CycleResult:
     orders: tuple[NextOpenOrder, ...]
     equity: float
     current_weights: pd.Series
+    max_capital: float | None = None
+
+    @property
+    def capital(self) -> float:
+        """The capital the targets were sized on: ``min(equity, max_capital)``.
+
+        Examples
+        --------
+        >>> CycleResult(None, (), 10000.0, pd.Series(dtype=float), max_capital=2000.0).capital
+        2000.0
+        """
+        return sizing_capital(self.equity, self.max_capital)
+
+
+def sizing_capital(equity: float, max_capital: float | None) -> float:
+    """Return the capital a cycle sizes on: ``equity`` capped at ``max_capital``.
+
+    Examples
+    --------
+    >>> sizing_capital(10000.0, 2000.0), sizing_capital(1000.0, 2000.0), sizing_capital(1000.0, None)
+    (2000.0, 1000.0, 1000.0)
+    """
+    return float(equity) if max_capital is None else min(float(equity), float(max_capital))
+
+
+def check_max_capital(max_capital, owner: str) -> float | None:
+    """Return ``max_capital`` as a float, refusing anything but a positive finite number or ``None``.
+
+    A bool is refused, though Python counts it a number.
+
+    Raises
+    ------
+    ValueError
+        If ``max_capital`` is not ``None`` or a positive finite int or float.
+
+    Examples
+    --------
+    >>> check_max_capital(2000, "DecisionCycle")
+    2000.0
+    >>> check_max_capital(True, "DecisionCycle")
+    Traceback (most recent call last):
+    ...
+    ValueError: DecisionCycle.max_capital must be a positive number or None, got True
+    """
+    if max_capital is None:
+        return None
+    if (
+        isinstance(max_capital, bool)
+        or not isinstance(max_capital, (int, float))
+        or not math.isfinite(max_capital)
+        or max_capital <= 0
+    ):
+        raise ValueError(
+            f"{owner}.max_capital must be a positive number or None, got {max_capital!r}"
+        )
+    return float(max_capital)
 
 
 class TargetSource(ABC):
@@ -415,9 +474,9 @@ class DecisionCycle:
         Where the bar's target weights come from.
     max_capital : float or None, default None
         Size the targets on ``min(equity, max_capital)`` instead of the whole
-        equity; the rest stays cash. Current weights are taken over the same
-        capital, so the rule sees the strategy's book. ``None`` sizes on the
-        whole equity.
+        equity; the rest stays cash. The rule is handed current weights over
+        the same capital, so it sees the strategy's book; the result keeps
+        the account's equity and weights. ``None`` sizes on the whole equity.
 
     Examples
     --------
@@ -430,10 +489,8 @@ class DecisionCycle:
     """
 
     def __init__(self, targets: TargetSource, max_capital: float | None = None):
-        if max_capital is not None and not (math.isfinite(max_capital) and max_capital > 0):
-            raise ValueError(f"DecisionCycle.max_capital must be positive, got {max_capital!r}")
         self.targets = targets
-        self.max_capital = max_capital
+        self.max_capital = check_max_capital(max_capital, "DecisionCycle")
 
     def run(
         self,
@@ -455,8 +512,8 @@ class DecisionCycle:
         Returns
         -------
         CycleResult
-            The decision, the orders (sells first), equity and current weights;
-            with ``max_capital`` the equity is the capital sized on.
+            The decision, the orders (sells first), the account's equity and
+            current weights, and the cap sized on.
 
         Raises
         ------
@@ -490,19 +547,19 @@ class DecisionCycle:
                 f"DecisionCycle at {inputs.timestamp.date()}: equity {equity} is "
                 f"not positive; there is nothing to size targets against"
             )
-        if self.max_capital is not None:
-            equity = min(equity, self.max_capital)
-        current_weights = pd.Series(
-            {p: q * float(close[p]) / equity for p, q in held.items()}, dtype=float
-        )
-        decision = self.targets.targets(inputs, current_weights)
+        capital = sizing_capital(equity, self.max_capital)
+        values = {p: q * float(close[p]) for p, q in held.items()}
+        current_weights = pd.Series({p: v / equity for p, v in values.items()}, dtype=float)
+        book = pd.Series({p: v / capital for p, v in values.items()}, dtype=float)
+        decision = self.targets.targets(inputs, book)
         if decision is None:
-            return CycleResult(None, (), equity, current_weights)
+            return CycleResult(None, (), equity, current_weights, self.max_capital)
         return CycleResult(
             decision,
-            self._size(decision.weights, inputs, held, equity, current_weights),
+            self._size(decision.weights, inputs, held, capital, book),
             equity,
             current_weights,
+            self.max_capital,
         )
 
     @staticmethod

@@ -187,6 +187,7 @@ class RunRecorder:
                 ),
                 current_weights=result.current_weights,
                 equity=result.equity,
+                max_capital=result.max_capital,
             )
         )
         if result.decision is None:
@@ -220,7 +221,12 @@ class RunRecorder:
             )
 
     def _add_cycle(self, cycle: CycleRecord) -> None:
-        """Add one cycle's equity, decision and current weights (``record_cycle``, a restore)."""
+        """Add one cycle's equity, decision and current weights (``record_cycle``, a restore).
+
+        The equity and the holdings are the account's; a decision's current
+        weights are over the capital it was sized on (``CycleRecord.capital``),
+        as the rule saw them beside the weights it decided.
+        """
         t = cycle.timestamp
         self._equity[t] = cycle.equity
         self._cycles.append(cycle)
@@ -228,7 +234,8 @@ class RunRecorder:
             return
         symbols = list(cycle.weights.index)
         self._decisions[t] = cycle.weights
-        self._current[t] = cycle.current_weights.reindex(symbols, fill_value=0.0).astype(float)
+        book = cycle.current_weights * (cycle.equity / cycle.capital)
+        self._current[t] = book.reindex(symbols, fill_value=0.0).astype(float)
 
     def order_submitted(self, order: NextOpenOrder, client_order_id: str) -> None:
         """Link the venue's order id to the next-open order it carries.
@@ -578,7 +585,9 @@ class RunRecorder:
 
         The live run directory keeps it as its journal (``LiveRecorder``):
         each day's step restores it, adds the day and writes every file
-        again from the whole history.
+        again from the whole history. Each cycle keeps the ``max_capital``
+        it was sized on, so a cap changed between days leaves the earlier
+        days' sizing on record (``config.json`` holds the current config).
 
         Examples
         --------
@@ -595,6 +604,7 @@ class RunRecorder:
                     "weights": None if cycle.weights is None else _pairs(cycle.weights),
                     "current_weights": _pairs(cycle.current_weights),
                     "equity": cycle.equity,
+                    "max_capital": cycle.max_capital,
                 }
                 for cycle in self._cycles
             ],
@@ -624,6 +634,7 @@ class RunRecorder:
                     weights=None if cycle["weights"] is None else _series(cycle["weights"]),
                     current_weights=_series(cycle["current_weights"]),
                     equity=float(cycle["equity"]),
+                    max_capital=cycle.get("max_capital"),
                 )
             )
         self._orders = [
