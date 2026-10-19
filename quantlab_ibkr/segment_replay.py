@@ -185,9 +185,11 @@ def replay_segment(
 ) -> SegmentReplay:
     """Replay ``live_dir``'s segment ``start``..``end`` closed loop and compare it to live.
 
-    The previous replay's directory (and any trader run directory a failed
-    replay left beside it) is removed first, so a failed replay leaves no
-    stale one behind.
+    The replay sizes on the live config's ``max_capital``, as the live
+    decide steps did, so a capped segment is replayed capped. The previous
+    replay's directory (and any trader run directory a failed replay left
+    beside it) is removed first, so a failed replay leaves no stale one
+    behind.
 
     Parameters
     ----------
@@ -235,6 +237,7 @@ def replay_segment(
         output_dir=str(briefing_dir),
         tracker=NullTracker(),
         name=REPLAY_DIR,
+        max_capital=config.max_capital,
     )
     began = time.perf_counter()
     run_dir = run_backtest(replay_config, predictions=predictions)

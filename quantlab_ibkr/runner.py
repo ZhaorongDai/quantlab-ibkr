@@ -42,7 +42,8 @@ def run(config: TraderConfig, *, predictions: xr.Dataset | None = None) -> Path:
     closed loop reads the replay window once, inside that recorder, before
     the venue runs (``ConstructorTargets.preloaded``), so each read is
     recorded as one request over the window and every bar's context is
-    sliced from memory.
+    sliced from memory. Every bar's targets are sized on
+    ``config.max_capital`` (``DecisionCycle``) when it is set.
 
     The run is tracked through ``config.tracker``, or the quantlab run's own
     tracker (``NullTracker`` when it had none), in the quantlab run's
@@ -103,7 +104,9 @@ def run(config: TraderConfig, *, predictions: xr.Dataset | None = None) -> Path:
     venue = config.venue.build(quantlab_run, request)
     recorder = RunRecorder(config, quantlab_run, init_cash=venue.init_cash)
     strategy = PortfolioStrategy(
-        venue=venue, cycle=DecisionCycle(targets), recorder=recorder
+        venue=venue,
+        cycle=DecisionCycle(targets, max_capital=config.max_capital),
+        recorder=recorder,
     )
     tracker = config.tracker or quantlab_run.tracker()
     with tracker.start_run(
