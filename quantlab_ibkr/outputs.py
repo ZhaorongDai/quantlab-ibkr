@@ -224,7 +224,7 @@ class RunRecorder:
         """Add one cycle's equity, decision and current weights (``record_cycle``, a restore).
 
         The equity and the holdings are the account's; a decision's current
-        weights are over the capital it was sized on (``CycleRecord.capital``),
+        weights are its book (``CycleRecord.book``: over the capital it was sized on),
         as the rule saw them beside the weights it decided.
         """
         t = cycle.timestamp
@@ -234,8 +234,7 @@ class RunRecorder:
             return
         symbols = list(cycle.weights.index)
         self._decisions[t] = cycle.weights
-        book = cycle.current_weights * (cycle.equity / cycle.capital)
-        self._current[t] = book.reindex(symbols, fill_value=0.0).astype(float)
+        self._current[t] = cycle.book.reindex(symbols, fill_value=0.0).astype(float)
 
     def order_submitted(self, order: NextOpenOrder, client_order_id: str) -> None:
         """Link the venue's order id to the next-open order it carries.
@@ -886,7 +885,7 @@ class LiveRecorder(RunRecorder):
     ``<live_dir>/`` holds the files ``RunRecorder`` writes (``config.json``,
     ``decisions.zarr``, ``holdings.zarr``, ``equity.zarr``, ``orders.zarr``,
     ``events.json``, ``metrics.json``, ``report.html``) plus ``journal.json``,
-    everything recorded so far (``RunRecorder.state``), and ``SUBMIT_FILE``,
+    everything recorded so far (``RunRecorder.state``), and ``submit.json``,
     the last bar whose orders went out with the ``max_capital`` they were
     sized on (``mark_submitting``). Each live step
     restores the journal, records its day through ``RunRecorder``'s own
@@ -1012,7 +1011,7 @@ class LiveRecorder(RunRecorder):
     def mark_submitting(self, t: pd.Timestamp) -> None:
         """Note, before any order of bar ``t`` goes out, the ``max_capital`` it is sized on.
 
-        ``SUBMIT_FILE`` holds the decision date and the config's cap. A run
+        ``submit.json`` holds the decision date and the config's cap. A run
         that sends ``t``'s orders and fails before recording them leaves it
         behind, so the rerun can tell whether the orders working at IBKR were
         sized under the cap it sizes on (``check_adoption``).
@@ -1026,18 +1025,18 @@ class LiveRecorder(RunRecorder):
             venue.run(strategy)
         """
         self.live_dir.mkdir(parents=True, exist_ok=True)
-        partial = self.live_dir / f".{SUBMIT_FILE}.partial"
+        partial = self.live_dir / f".{_SUBMIT_FILE}.partial"
         partial.write_text(
             json.dumps({"decision_date": _day(t), "max_capital": self.config.max_capital}, indent=2)
         )
-        partial.replace(self.live_dir / SUBMIT_FILE)
+        partial.replace(self.live_dir / _SUBMIT_FILE)
 
     def check_adoption(self, t: pd.Timestamp) -> None:
         """Refuse to adopt ``t``'s working orders when they were sized under another cap.
 
         The orders working at IBKR are adopted by symbol and side; the
         rerun's orders are sized under the config's current ``max_capital``.
-        When ``SUBMIT_FILE`` says the earlier run of ``t`` sized them under a
+        When ``submit.json`` says the earlier run of ``t`` sized them under a
         different cap, adopting them would leave orders of the old size
         working against a record of the new one. A directory without the
         file for ``t`` (orders sent before it was kept) is not refused.
@@ -1055,7 +1054,7 @@ class LiveRecorder(RunRecorder):
             if working_orders:
                 recorder.check_adoption(t)
         """
-        path = self.live_dir / SUBMIT_FILE
+        path = self.live_dir / _SUBMIT_FILE
         if not path.is_file():
             return
         sent = json.loads(path.read_text())
@@ -1193,7 +1192,7 @@ _METRICS_FILE = "metrics.json"
 _REPORT_FILE = "report.html"
 _JOURNAL_FILE = "journal.json"
 #: The live run directory's note of the bar whose orders go out and the cap they are sized on.
-SUBMIT_FILE = "submit.json"
+_SUBMIT_FILE = "submit.json"
 
 
 def read_config(run_dir: Path) -> dict:

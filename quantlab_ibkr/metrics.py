@@ -144,6 +144,20 @@ class CycleRecord:
         """
         return sizing_capital(self.equity, self.max_capital)
 
+    @property
+    def book(self) -> pd.Series:
+        """Each holding over ``capital``: the current weights the rule saw beside its decision.
+
+        Examples
+        --------
+        >>> record = CycleRecord(
+        ...     pd.Timestamp("2024-01-03"), None, pd.Series({10001: 0.1}), 1e4, 2e3
+        ... )
+        >>> record.book.to_dict()
+        {10001: 0.5}
+        """
+        return self.current_weights * (self.equity / self.capital)
+
 
 def decided_rebalances(cycles: Sequence[CycleRecord]) -> np.ndarray:
     """Return the bars of the run's decided rebalances: the cycles with a finite target.
@@ -719,11 +733,10 @@ def _max_target_deviation(
                 continue
             # The decided weights are of the capital sized on (the equity
             # without a cap), so the holding is valued over it too.
-            capital = cycle.capital
-            held = float(cycle.current_weights.get(permno, 0.0)) * cycle.equity / capital
+            held = float(cycle.book.get(permno, 0.0))
             traded = filled.get((cycle.timestamp, permno), 0.0)
             if traded:  # an order was sized, so the close exists
-                held += traded * float(closes.at[cycle.timestamp, permno]) / capital
+                held += traded * float(closes.at[cycle.timestamp, permno]) / cycle.capital
             gaps.append(abs(weight - held))
     return max(gaps) if gaps else None
 
