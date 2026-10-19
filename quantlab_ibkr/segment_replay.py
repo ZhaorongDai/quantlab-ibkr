@@ -49,7 +49,7 @@ from quantlab_ibkr.account_history import AccountHistory
 from quantlab_ibkr.base.config import TraderConfig
 from quantlab_ibkr.base.venue import Loop
 from quantlab_ibkr.metrics import UNFILLED_STATUSES, bar_clock
-from quantlab_ibkr.outputs import read_equity
+from quantlab_ibkr.outputs import read_equity, read_max_capital
 from quantlab_ibkr.quantlab_run import QuantlabRun
 from quantlab_ibkr.runner import run as run_backtest
 from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig, ExecutionConfig
@@ -185,11 +185,12 @@ def replay_segment(
 ) -> SegmentReplay:
     """Replay ``live_dir``'s segment ``start``..``end`` closed loop and compare it to live.
 
-    The replay sizes on the live config's ``max_capital``, as the live
-    decide steps did, so a capped segment is replayed capped. The previous
-    replay's directory (and any trader run directory a failed replay left
-    beside it) is removed first, so a failed replay leaves no stale one
-    behind.
+    The replay sizes each cycle on the ``max_capital`` the live journal
+    recorded for it (``read_max_capital``), so a capped segment is replayed
+    under each day's cap; a bar the journal does not hold takes the live
+    config's. The previous replay's directory (and any trader run directory
+    a failed replay left beside it) is removed first, so a failed replay
+    leaves no stale one behind.
 
     Parameters
     ----------
@@ -240,7 +241,10 @@ def replay_segment(
         max_capital=config.max_capital,
     )
     began = time.perf_counter()
-    run_dir = run_backtest(replay_config, predictions=predictions)
+    caps = {
+        bar: cap for bar, cap in read_max_capital(live_dir).items() if start <= bar <= end
+    }
+    run_dir = run_backtest(replay_config, predictions=predictions, max_capital_at=caps)
     seconds = time.perf_counter() - began
     run_dir.rename(target)
     bars = len(equity["timestamp"])

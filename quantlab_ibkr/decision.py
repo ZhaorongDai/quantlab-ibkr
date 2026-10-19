@@ -449,6 +449,10 @@ class DecisionCycle:
         rule is handed it as it is, every finite target is sized on the
         capital and a name targeted at 0 is closed; a holding the rule keeps
         (NaN) stays as it is.
+    max_capital_at : Mapping, optional
+        The cap of each bar it names (``None``: uncapped), in place of
+        ``max_capital`` on that bar: a replay of a live segment sizes each
+        cycle on the cap live recorded for it.
 
     Examples
     --------
@@ -460,9 +464,19 @@ class DecisionCycle:
     (NextOpenOrder(permno=10001, side='BUY', quantity=33, decision_date=Timestamp('2024-01-03 00:00:00')),)
     """
 
-    def __init__(self, targets: TargetSource, max_capital: float | None = None):
+    def __init__(
+        self,
+        targets: TargetSource,
+        max_capital: float | None = None,
+        *,
+        max_capital_at: Mapping[pd.Timestamp, float | None] | None = None,
+    ):
         self.targets = targets
         self.max_capital = check_max_capital(max_capital, "DecisionCycle")
+        self.max_capital_at = {
+            pd.Timestamp(t): check_max_capital(cap, "DecisionCycle")
+            for t, cap in (max_capital_at or {}).items()
+        }
 
     def run(
         self,
@@ -519,19 +533,20 @@ class DecisionCycle:
                 f"DecisionCycle at {inputs.timestamp.date()}: equity {equity} is "
                 f"not positive; there is nothing to size targets against"
             )
-        capital = sizing_capital(equity, self.max_capital)
+        max_capital = self.max_capital_at.get(pd.Timestamp(inputs.timestamp), self.max_capital)
+        capital = sizing_capital(equity, max_capital)
         values = {p: q * float(close[p]) for p, q in held.items()}
         current_weights = pd.Series({p: v / equity for p, v in values.items()}, dtype=float)
         book = pd.Series({p: v / capital for p, v in values.items()}, dtype=float)
         decision = self.targets.targets(inputs, book)
         if decision is None:
-            return CycleResult(None, (), equity, current_weights, self.max_capital)
+            return CycleResult(None, (), equity, current_weights, max_capital)
         return CycleResult(
             decision,
             self._size(decision.weights, inputs, held, capital, book),
             equity,
             current_weights,
-            self.max_capital,
+            max_capital,
         )
 
     @staticmethod

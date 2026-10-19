@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Mapping
 from pathlib import Path
 
 import numpy as np
@@ -27,7 +28,12 @@ from quantlab_ibkr.strategy import PortfolioStrategy
 TRACKED_BLOCKS = ("whole", "in_sample", "out_of_sample", "benchmark", "relative", "execution")
 
 
-def run(config: TraderConfig, *, predictions: xr.Dataset | None = None) -> Path:
+def run(
+    config: TraderConfig,
+    *,
+    predictions: xr.Dataset | None = None,
+    max_capital_at: Mapping[pd.Timestamp, float | None] | None = None,
+) -> Path:
     """Execute the quantlab run ``config`` names and write a trader run directory.
 
     Closed loop (ADR 0001, 0008) rebuilds the run's decision inputs
@@ -67,6 +73,10 @@ def run(config: TraderConfig, *, predictions: xr.Dataset | None = None) -> Path:
         Closed loop only: the prediction rows to decide from, one variable
         per label on ``(timestamp, symbol)``; the run's own panel when
         ``None``.
+    max_capital_at : Mapping, optional
+        The cap of each bar it names, in place of ``config.max_capital``
+        there (``DecisionCycle``): the briefing's replay passes the caps the
+        live journal recorded per cycle.
 
     Returns
     -------
@@ -105,7 +115,9 @@ def run(config: TraderConfig, *, predictions: xr.Dataset | None = None) -> Path:
     recorder = RunRecorder(config, quantlab_run, init_cash=venue.init_cash)
     strategy = PortfolioStrategy(
         venue=venue,
-        cycle=DecisionCycle(targets, max_capital=config.max_capital),
+        cycle=DecisionCycle(
+            targets, max_capital=config.max_capital, max_capital_at=max_capital_at
+        ),
         recorder=recorder,
     )
     tracker = config.tracker or quantlab_run.tracker()

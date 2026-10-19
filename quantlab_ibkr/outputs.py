@@ -1232,6 +1232,22 @@ def read_equity(run_dir: Path) -> xr.Dataset:
         return equity.load()
 
 
+def read_max_capital(live_dir: Path) -> dict[pd.Timestamp, float | None]:
+    """Return the ``max_capital`` each cycle of a live run directory was sized on, by bar.
+
+    Read from its journal; a cycle recorded before the journal kept the cap
+    was sized uncapped (``None``).
+
+    Examples
+    --------
+    ::
+
+        read_max_capital(live_dir)  # {Timestamp('2026-10-14'): 480772.47, ...}
+    """
+    state = json.loads((Path(live_dir) / _JOURNAL_FILE).read_text())
+    return {pd.Timestamp(c["timestamp"]): c.get("max_capital") for c in state["cycles"]}
+
+
 def report_path(run_dir: Path) -> Path:
     """Return where a trader run's HTML report is.
 
