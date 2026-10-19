@@ -11,7 +11,11 @@ What is locked here (ADR 0003, ADR 0008):
 - closed loop: ``ConstructorTargets`` decides the bars quantlab's
   ``DecisionInputs.rebalances`` names through its ``context`` and the rule's
   ``decide``, and a held security missing from the prediction row joins the
-  context unpredicted (tradable where the price dataset has a fill price).
+  context unpredicted (tradable where the price dataset has a fill price);
+- ``max_capital`` sizes on ``min(equity, max_capital)`` and hands the rule
+  its book's weights over that capital, while the result keeps the account's
+  equity and weights; a bool or a string cap is refused; after a cap cut
+  below the holdings the book sums above 1 and sizing stays on the cap.
 """
 
 import math
@@ -265,3 +269,97 @@ def test_a_hold_keeps_every_holding():
 
     assert result.decision.failure == "infeasible"
     assert result.orders == ()
+
+
+def test_max_capital_sizes_targets_on_the_cap_and_still_closes_non_targets():
+    # equity = 9000 cash + 100 * 10 = 10000, capped at 2000: 10001 at 0.5 ->
+    # trunc(0.5 * 2000 / 20) = 50; 10003 (held, target 0) is closed; the rest is cash.
+    cycle = DecisionCycle(TableTargets(_table({T: {10001: 0.5, 10003: 0.0}})), max_capital=2000.0)
+    result = cycle.run(_inputs({10001: 20.0, 10003: 10.0}), positions={10003: 100}, cash=9000.0)
+
+    assert result.orders == (
+        NextOpenOrder(10003, "SELL", 100, T),
+        NextOpenOrder(10001, "BUY", 50, T),
+    )
+    assert result.max_capital == 2000.0 and result.capital == 2000.0
+
+
+class _Seen(TableTargets):
+    """A table that keeps the current weights the cycle hands it."""
+
+    def targets(self, inputs, current_weights):
+        self.seen = current_weights.to_dict()
+        return super().targets(inputs, current_weights)
+
+
+def test_max_capital_keeps_the_account_equity_and_weights_and_hands_the_rule_the_capped_book():
+    # A 10,000 account capped at 2,000 holding 1,000 of 10003: the account
+    # holds 10% (90% cash), the strategy's book 50% of its capital.
+    targets = _Seen(_table({T: {10003: 0.5}}))
+    cycle = DecisionCycle(targets, max_capital=2000.0)
+    result = cycle.run(_inputs({10003: 10.0}), positions={10003: 100}, cash=9000.0)
+
+    assert result.equity == 10000.0
+    assert result.current_weights.to_dict() == {10003: 0.1}
+    assert targets.seen == {10003: 0.5}
+    assert result.orders == ()  # the target equals the book's weight: kept
+
+
+def test_without_max_capital_the_capital_is_the_equity():
+    result = _cycle({10001: 1.0}).run(_inputs({10001: 10.0}), positions={}, cash=1000.0)
+
+    assert result.max_capital is None and result.capital == result.equity == 1000.0
+
+
+def test_max_capital_above_equity_sizes_on_equity():
+    cycle = DecisionCycle(TableTargets(_table({T: {10001: 1.0}})), max_capital=1e9)
+    result = cycle.run(_inputs({10001: 10.0}), positions={}, cash=1000.0)
+
+    assert result.equity == 1000.0
+    assert result.orders == (NextOpenOrder(10001, "BUY", 100, T),)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, math.inf, math.nan, True, "100"])
+def test_max_capital_must_be_positive(bad):
+    with pytest.raises(ValueError, match="max_capital"):
+        DecisionCycle(TableTargets(_table({T: {10001: 1.0}})), max_capital=bad)
+
+
+@pytest.mark.parametrize("bad", [0, -5.0, "100", True, math.inf])
+def test_trader_config_refuses_a_non_positive_max_capital(bad):
+    from quantlab_ibkr.base.config import TraderConfig
+    from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
+
+    with pytest.raises(ValueError, match="max_capital"):
+        TraderConfig("/runs/x", BacktestVenueConfig(), max_capital=bad)
+
+
+def test_trader_config_max_capital_round_trips_and_defaults_to_none():
+    from quantlab_ibkr.base.config import TraderConfig
+    from quantlab_ibkr.venue.backtest.venue import BacktestVenueConfig
+
+    assert TraderConfig("/runs/x", BacktestVenueConfig()).max_capital is None
+    config = TraderConfig("/runs/x", BacktestVenueConfig(), max_capital=480772.47)
+    assert TraderConfig.from_config(config.get_config()).max_capital == 480772.47
+
+
+def test_after_a_cap_cut_the_rule_sees_a_book_above_one_and_sizing_stays_on_the_cap():
+    # 10,000 account, 3,000 held, the cap cut to 2,000: the book is 1.5 of
+    # the capital and the rule sees it as it is. Sizing stays on 2,000: the
+    # out-of-target 10003 is closed, 10002 at its book weight is kept, 10001
+    # is bought at trunc(0.5 * 2000 / 20) = 50.
+    targets = _Seen(_table({T: {10001: 0.5, 10002: 0.5, 10003: 0.0}}))
+    cycle = DecisionCycle(targets, max_capital=2000.0)
+    result = cycle.run(
+        _inputs({10001: 20.0, 10002: 10.0, 10003: 10.0}),
+        positions={10002: 100, 10003: 200},
+        cash=7000.0,
+    )
+
+    assert targets.seen == {10002: 0.5, 10003: 1.0}
+    assert sum(targets.seen.values()) == 1.5
+    assert result.capital == 2000.0 and result.equity == 10000.0
+    assert result.orders == (
+        NextOpenOrder(10003, "SELL", 200, T),
+        NextOpenOrder(10001, "BUY", 50, T),
+    )

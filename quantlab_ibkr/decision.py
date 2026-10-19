@@ -30,6 +30,7 @@ from quantlab.core.component import walk_components
 from quantlab.portfolio.base import Decision
 from quantlab.portfolio.decision_inputs import DecisionInputs
 from quantlab_ibkr._support.jsonable import python_scalar
+from quantlab_ibkr.base.config import check_max_capital
 from quantlab_ibkr.base.venue import BarInputs, NextOpenOrder
 
 
@@ -46,9 +47,12 @@ class CycleResult:
     orders : tuple of NextOpenOrder
         The sized orders, sells first.
     equity : float
-        Cash plus every holding at t's raw close.
+        The account's equity: cash plus every holding at t's raw close.
     current_weights : pandas.Series
-        Each holding's close value over equity, per PERMNO.
+        Each holding's close value over the account's equity, per PERMNO.
+    max_capital : float or None
+        The cap the cycle sized on (``DecisionCycle.max_capital``); ``None``
+        sized on the whole equity.
 
     Examples
     --------
@@ -67,6 +71,29 @@ class CycleResult:
     orders: tuple[NextOpenOrder, ...]
     equity: float
     current_weights: pd.Series
+    max_capital: float | None = None
+
+    @property
+    def capital(self) -> float:
+        """The capital the targets were sized on: ``min(equity, max_capital)``.
+
+        Examples
+        --------
+        >>> CycleResult(None, (), 10000.0, pd.Series(dtype=float), max_capital=2000.0).capital
+        2000.0
+        """
+        return sizing_capital(self.equity, self.max_capital)
+
+
+def sizing_capital(equity: float, max_capital: float | None) -> float:
+    """Return the capital a cycle sizes on: ``equity`` capped at ``max_capital``.
+
+    Examples
+    --------
+    >>> sizing_capital(10000.0, 2000.0), sizing_capital(1000.0, 2000.0), sizing_capital(1000.0, None)
+    (2000.0, 1000.0, 1000.0)
+    """
+    return float(equity) if max_capital is None else min(float(equity), float(max_capital))
 
 
 class TargetSource(ABC):
@@ -413,6 +440,19 @@ class DecisionCycle:
     ----------
     targets : TargetSource
         Where the bar's target weights come from.
+    max_capital : float or None, default None
+        Size the targets on ``min(equity, max_capital)`` instead of the whole
+        equity; the rest stays cash. The rule is handed current weights over
+        the same capital, so it sees the strategy's book; the result keeps
+        the account's equity and weights. ``None`` sizes on the whole equity.
+        A cap cut below what is held leaves a book summing above 1: the
+        rule is handed it as it is, every finite target is sized on the
+        capital and a name targeted at 0 is closed; a holding the rule keeps
+        (NaN) stays as it is.
+    max_capital_at : Mapping, optional
+        The cap of each bar it names (``None``: uncapped), in place of
+        ``max_capital`` on that bar: a replay of a live segment sizes each
+        cycle on the cap live recorded for it.
 
     Examples
     --------
@@ -424,8 +464,19 @@ class DecisionCycle:
     (NextOpenOrder(permno=10001, side='BUY', quantity=33, decision_date=Timestamp('2024-01-03 00:00:00')),)
     """
 
-    def __init__(self, targets: TargetSource):
+    def __init__(
+        self,
+        targets: TargetSource,
+        max_capital: float | None = None,
+        *,
+        max_capital_at: Mapping[pd.Timestamp, float | None] | None = None,
+    ):
         self.targets = targets
+        self.max_capital = check_max_capital(max_capital, "DecisionCycle")
+        self.max_capital_at = {
+            pd.Timestamp(t): check_max_capital(cap, "DecisionCycle")
+            for t, cap in (max_capital_at or {}).items()
+        }
 
     def run(
         self,
@@ -447,7 +498,8 @@ class DecisionCycle:
         Returns
         -------
         CycleResult
-            The decision, the orders (sells first), equity and current weights.
+            The decision, the orders (sells first), the account's equity and
+            current weights, and the cap sized on.
 
         Raises
         ------
@@ -481,17 +533,20 @@ class DecisionCycle:
                 f"DecisionCycle at {inputs.timestamp.date()}: equity {equity} is "
                 f"not positive; there is nothing to size targets against"
             )
-        current_weights = pd.Series(
-            {p: q * float(close[p]) / equity for p, q in held.items()}, dtype=float
-        )
-        decision = self.targets.targets(inputs, current_weights)
+        max_capital = self.max_capital_at.get(pd.Timestamp(inputs.timestamp), self.max_capital)
+        capital = sizing_capital(equity, max_capital)
+        values = {p: q * float(close[p]) for p, q in held.items()}
+        current_weights = pd.Series({p: v / equity for p, v in values.items()}, dtype=float)
+        book = pd.Series({p: v / capital for p, v in values.items()}, dtype=float)
+        decision = self.targets.targets(inputs, book)
         if decision is None:
-            return CycleResult(None, (), equity, current_weights)
+            return CycleResult(None, (), equity, current_weights, max_capital)
         return CycleResult(
             decision,
-            self._size(decision.weights, inputs, held, equity, current_weights),
+            self._size(decision.weights, inputs, held, capital, book),
             equity,
             current_weights,
+            max_capital,
         )
 
     @staticmethod

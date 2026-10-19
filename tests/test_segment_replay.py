@@ -13,9 +13,12 @@ Pro Fixed (the closed-loop backtest's default fee model). Locked:
 - a segment that did not start from an empty account is stated;
 - the live side counts the unfilled orders and fees of the orders decided
   before t only, as the replay (which never decides t) does: t's orders fill
-  at t+1's open, after the close the briefing reports (#73).
+  at t+1's open, after the close the briefing reports (#73);
+- a segment traded under ``max_capital`` is replayed under it, each cycle
+  under the cap the journal recorded for it.
 """
 
+import dataclasses
 import json
 import logging
 import re
@@ -250,3 +253,46 @@ def test_the_live_side_leaves_out_the_orders_decided_on_t(tmp_path):
     assert replay.fees_live == pytest.approx(before, abs=1e-9)
     assert replay.fees_live == pytest.approx(replay.fees_replay, abs=1e-9)
     assert replay.unfilled_live == replay.unfilled_replay == 0
+
+
+def test_the_replay_sizes_on_the_live_max_capital(tmp_path):
+    day = _day(tmp_path)
+    cap = day.run.init_cash / 4
+    day.config = dataclasses.replace(day.config, max_capital=cap)
+    day.trade(range(FIRST, N_BARS))
+    brief = briefing.close_briefing(day.config)
+    replay = brief.replay
+    assert brief.replay_failure is None
+
+    np.testing.assert_allclose(
+        replay.curve["replay_value"].values, replay.curve["live_value"].values, rtol=1e-9
+    )
+    assert replay.gap_pct == pytest.approx(0.0, abs=1e-7)
+    live, replayed = (_zarr(d / "orders.zarr") for d in (day.live_dir, replay.run_dir))
+    before_t = live["decision_date"].values < np.datetime64(brief.t)
+    np.testing.assert_array_equal(replayed["quantity"].values, live["quantity"].values[before_t])
+    assert int(replayed["quantity"].values.sum()) > 0
+
+
+def test_the_replay_sizes_each_cycle_on_the_cap_live_recorded_for_it(tmp_path):
+    # The cap is a quarter of the account on the first rebalance (bar 6) and
+    # half of it on the second (bar 9): the replay follows the journal's
+    # per-cycle caps, not the config's last one for the whole segment.
+    day = _day(tmp_path)
+    cap = day.run.init_cash / 4
+    day.config = dataclasses.replace(day.config, max_capital=cap)
+    day.trade(range(FIRST, 8))
+    day.config = dataclasses.replace(day.config, max_capital=2 * cap)
+    day.trade(range(8, N_BARS))
+    journal = json.loads((day.live_dir / "journal.json").read_text())
+    assert [c["max_capital"] for c in journal["cycles"]] == [cap] * 3 + [2 * cap] * (N_BARS - 8)
+
+    brief = briefing.close_briefing(day.config)
+    replay = brief.replay
+    assert brief.replay_failure is None
+    np.testing.assert_allclose(
+        replay.curve["replay_value"].values, replay.curve["live_value"].values, rtol=1e-9
+    )
+    live, replayed = (_zarr(d / "orders.zarr") for d in (day.live_dir, replay.run_dir))
+    before_t = live["decision_date"].values < np.datetime64(brief.t)
+    np.testing.assert_array_equal(replayed["quantity"].values, live["quantity"].values[before_t])

@@ -19,7 +19,11 @@ fraction, reported back as IBKR executions and completed orders). Locked:
 - the Decision recheck passes on the live run directory, read from the live
   prediction store;
 - an order IBKR rejects is recorded once, ``rejected`` with IBKR's reason;
-- the command line builds the live config from a file and flags.
+- the command line builds the live config from a file and flags;
+- with ``max_capital`` the equity and holdings recorded are the account's,
+  the decisions' current weights the capped book's, and each cycle keeps its
+  cap in the journal; orders working at IBKR that were sent under another
+  cap are not adopted.
 """
 
 import dataclasses
@@ -518,3 +522,66 @@ def test_the_command_refuses_a_live_account_before_connecting(day, monkeypatch, 
     monkeypatch.setenv("TWS_ACCOUNT", "U1234567")
     assert cli.main(["live", "decide", str(path)]) == 1
     assert "not an IBKR paper account" in capsys.readouterr().err
+
+
+def _capped(day: Day, cap: float) -> None:
+    day.config = dataclasses.replace(day.config, max_capital=cap)
+
+
+def test_max_capital_records_the_account_and_the_cap_of_each_cycle(day):
+    # A 10,000 account trading 2,500: the records are the account's (equity,
+    # holdings over equity), the decisions the strategy's book, and each
+    # cycle keeps the cap it was sized on.
+    cap = day.run.init_cash / 4
+    _capped(day, cap)
+    day.trade(range(FIRST, N_BARS))
+
+    value = _zarr(day.live_dir / "equity.zarr")["value"].values
+    assert value[0] == pytest.approx(day.run.init_cash)
+    last = N_BARS - 1
+    marked = day.broker.cash + sum(q * day.close[p][last] for p, q in day.broker.positions.items())
+    assert value[-1] == pytest.approx(marked, rel=1e-12)
+    held = _zarr(day.live_dir / "holdings.zarr")["holding"].sum("symbol").values
+    assert held.max() < 0.3 and held[-1] > 0.2  # about a quarter of the account
+
+    decisions = _zarr(day.live_dir / "decisions.zarr")
+    k = 9
+    equity_k = float(value[k - FIRST])
+    holding_k = _zarr(day.live_dir / "holdings.zarr")["holding"].sel(timestamp=day.bars[k])
+    current = decisions["current_weight"].sel(timestamp=day.bars[k])
+    np.testing.assert_allclose(
+        current.values, holding_k.sel(symbol=current["symbol"]).values * equity_k / cap, rtol=1e-12
+    )
+
+    journal = json.loads((day.live_dir / "journal.json").read_text())
+    assert [c["max_capital"] for c in journal["cycles"]] == [cap] * (N_BARS - FIRST)
+    recorder = LiveRecorder(day.config, day.run)
+    again = RunRecorder(day.config, day.run, init_cash=0.0)
+    again.restore(recorder.state())
+    assert again.state() == RunRecorder.state(recorder)
+
+
+def test_working_orders_sized_under_another_max_capital_are_not_adopted(day):
+    cap = day.run.init_cash / 4
+    _capped(day, cap)
+    day.trade(range(FIRST, 6))
+    rebalance = 6
+    assert len(day.decide(rebalance).submitted) == 2
+    sent = day.broker.received
+    # The run sent its orders and failed before recording them.
+    journal = json.loads((day.live_dir / "journal.json").read_text())
+    journal["cycles"] = journal["cycles"][:-1]
+    journal["orders"] = []
+    journal["events"] = []
+    (day.live_dir / "journal.json").write_text(json.dumps(journal))
+
+    _capped(day, cap / 2)
+    with pytest.raises(ValueError, match="max_capital"):
+        day.decide(rebalance)
+    assert day.broker.received == sent
+    assert not LiveRecorder(day.config, day.run).has_cycle(day.bars[rebalance])
+
+    _capped(day, cap)
+    adopted = day.decide(rebalance)
+    assert len(adopted.adopted) == 2 and adopted.submitted == ()
+    assert day.broker.received == sent

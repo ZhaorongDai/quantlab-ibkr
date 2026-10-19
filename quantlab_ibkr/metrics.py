@@ -81,6 +81,7 @@ from quantlab.runs import backtest_stats
 from quantlab.runs.run_metrics import AccountRecord, BenchmarkRecord
 from quantlab.runs.run_metrics import run_metrics as quantlab_run_metrics
 from quantlab_ibkr._support.jsonable import python_scalar
+from quantlab_ibkr.decision import sizing_capital
 
 #: Order statuses of a next-open order that ended without a fill.
 UNFILLED_STATUSES = ("unfilled", "rejected", "denied")
@@ -106,9 +107,13 @@ class CycleRecord:
         The decided weights per PERMNO (NaN keeps the holding); ``None`` on
         a bar that did not rebalance.
     current_weights : pandas.Series
-        Each holding's weight at t's raw close before the decision.
+        Each holding's weight of the account at t's raw close before the
+        decision.
     equity : float
-        Equity at t's raw close.
+        The account's equity at t's raw close.
+    max_capital : float or None
+        The cap the cycle sized its targets on (``CycleResult.max_capital``);
+        the decided weights are of ``capital``.
 
     Examples
     --------
@@ -126,6 +131,32 @@ class CycleRecord:
     weights: pd.Series | None
     current_weights: pd.Series
     equity: float
+    max_capital: float | None = None
+
+    @property
+    def capital(self) -> float:
+        """The capital the weights were decided on: ``min(equity, max_capital)``.
+
+        Examples
+        --------
+        >>> CycleRecord(pd.Timestamp("2024-01-03"), None, pd.Series(dtype=float), 1e4, 2e3).capital
+        2000.0
+        """
+        return sizing_capital(self.equity, self.max_capital)
+
+    @property
+    def book(self) -> pd.Series:
+        """Each holding over ``capital``: the current weights the rule saw beside its decision.
+
+        Examples
+        --------
+        >>> record = CycleRecord(
+        ...     pd.Timestamp("2024-01-03"), None, pd.Series({10001: 0.1}), 1e4, 2e3
+        ... )
+        >>> record.book.to_dict()
+        {10001: 0.5}
+        """
+        return self.current_weights * (self.equity / self.capital)
 
 
 def decided_rebalances(cycles: Sequence[CycleRecord]) -> np.ndarray:
@@ -700,10 +731,12 @@ def _max_target_deviation(
         for permno, weight in cycle.weights.items():
             if not np.isfinite(weight) or (fill_bar, permno) in settled:
                 continue
-            held = float(cycle.current_weights.get(permno, 0.0))
+            # The decided weights are of the capital sized on (the equity
+            # without a cap), so the holding is valued over it too.
+            held = float(cycle.book.get(permno, 0.0))
             traded = filled.get((cycle.timestamp, permno), 0.0)
             if traded:  # an order was sized, so the close exists
-                held += traded * float(closes.at[cycle.timestamp, permno]) / cycle.equity
+                held += traded * float(closes.at[cycle.timestamp, permno]) / cycle.capital
             gaps.append(abs(weight - held))
     return max(gaps) if gaps else None
 

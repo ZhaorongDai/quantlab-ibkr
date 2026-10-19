@@ -130,9 +130,18 @@ with the file override its venue fields: `--dry-run`, `--host`, `--port`, `--cli
     "port": 4002,
     "client_id": 1,
     "order_deadline": "09:20"
-  }
+  },
+  "max_capital": 480772.47
 }
 ```
+
+`max_capital` (optional, a positive number; `null` or absent = the whole account) caps the
+capital the strategy trades: each bar's targets are sized on the **capital**,
+`min(account equity, max_capital)`, and the rest stays cash. The rule is handed the **book**,
+the holdings as weights of that capital; the recorded equity, returns and holdings stay the
+account's. Names the rule targets at 0 are still closed. Each cycle's cap is kept in
+`journal.json`, so the cap may change between days, and the close briefing's replay sizes
+each day on the cap it was decided under.
 
 ```bash
 cd ~/projects/quantlab-ibkr
@@ -169,8 +178,11 @@ although the auction is a day later. Run it again the next trading morning.
 **The live run directory** (`live_dir`) holds the files a closed-loop backtest's run
 directory holds: `decisions.zarr` (with `current_weight`), `holdings.zarr`, `equity.zarr`,
 `orders.zarr`, `events.json`, `metrics.json` and `report.html`. The steps append to them one
-day at a time, and the files are rewritten from `journal.json` each time. The directory also
-holds `con_ids.json` (the conId cache) and `decision_recheck.json`.
+day at a time, and the files are rewritten from `journal.json` each time (each cycle there
+keeps the `max_capital` it was sized on). The directory also holds `con_ids.json` (the conId
+cache), `decision_recheck.json` and `submit.json`: written by decide before any of t's orders
+goes out, it holds t's date and the `max_capital` those orders are sized on, so a rerun can
+tell what cap the orders found working at IBKR were sized under.
 
 - Equity and holdings of bar t are written by decide. It marks the account at t's close, so
   each row is a day's decide step.
@@ -184,6 +196,9 @@ holds `con_ids.json` (the conId cache) and `decision_recheck.json`.
 - An order already working at IBKR for t is adopted, never sent again. This covers a run
   that submitted and then failed before recording. Every order's IBKR reference is its
   nautilus client order id, tagged with the decision date (`O-...-IBKR-20261007-n`).
+  Adoption matches by symbol and side, so it is refused (decide exits 1 and sends nothing)
+  when `submit.json` says t's working orders were sized under a different `max_capital`
+  than the config's: cancel them at IBKR, or restore that cap, and run decide again.
 - `record` adds each IBKR execution once.
 - IBKR reports executions of the current day only. Run `record` on the day of the open.
   An order IBKR reports nothing about is left as `submitted` and listed in the output.

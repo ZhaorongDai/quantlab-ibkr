@@ -187,6 +187,7 @@ class RunRecorder:
                 ),
                 current_weights=result.current_weights,
                 equity=result.equity,
+                max_capital=result.max_capital,
             )
         )
         if result.decision is None:
@@ -220,7 +221,12 @@ class RunRecorder:
             )
 
     def _add_cycle(self, cycle: CycleRecord) -> None:
-        """Add one cycle's equity, decision and current weights (``record_cycle``, a restore)."""
+        """Add one cycle's equity, decision and current weights (``record_cycle``, a restore).
+
+        The equity and the holdings are the account's; a decision's current
+        weights are its book (``CycleRecord.book``: over the capital it was sized on),
+        as the rule saw them beside the weights it decided.
+        """
         t = cycle.timestamp
         self._equity[t] = cycle.equity
         self._cycles.append(cycle)
@@ -228,7 +234,7 @@ class RunRecorder:
             return
         symbols = list(cycle.weights.index)
         self._decisions[t] = cycle.weights
-        self._current[t] = cycle.current_weights.reindex(symbols, fill_value=0.0).astype(float)
+        self._current[t] = cycle.book.reindex(symbols, fill_value=0.0).astype(float)
 
     def order_submitted(self, order: NextOpenOrder, client_order_id: str) -> None:
         """Link the venue's order id to the next-open order it carries.
@@ -578,7 +584,9 @@ class RunRecorder:
 
         The live run directory keeps it as its journal (``LiveRecorder``):
         each day's step restores it, adds the day and writes every file
-        again from the whole history.
+        again from the whole history. Each cycle keeps the ``max_capital``
+        it was sized on, so a cap changed between days leaves the earlier
+        days' sizing on record (``config.json`` holds the current config).
 
         Examples
         --------
@@ -595,6 +603,7 @@ class RunRecorder:
                     "weights": None if cycle.weights is None else _pairs(cycle.weights),
                     "current_weights": _pairs(cycle.current_weights),
                     "equity": cycle.equity,
+                    "max_capital": cycle.max_capital,
                 }
                 for cycle in self._cycles
             ],
@@ -624,6 +633,7 @@ class RunRecorder:
                     weights=None if cycle["weights"] is None else _series(cycle["weights"]),
                     current_weights=_series(cycle["current_weights"]),
                     equity=float(cycle["equity"]),
+                    max_capital=cycle.get("max_capital"),
                 )
             )
         self._orders = [
@@ -875,7 +885,9 @@ class LiveRecorder(RunRecorder):
     ``<live_dir>/`` holds the files ``RunRecorder`` writes (``config.json``,
     ``decisions.zarr``, ``holdings.zarr``, ``equity.zarr``, ``orders.zarr``,
     ``events.json``, ``metrics.json``, ``report.html``) plus ``journal.json``,
-    everything recorded so far (``RunRecorder.state``). Each live step
+    everything recorded so far (``RunRecorder.state``), and ``submit.json``,
+    the last bar whose orders went out with the ``max_capital`` they were
+    sized on (``mark_submitting``). Each live step
     restores the journal, records its day through ``RunRecorder``'s own
     per-cycle and per-order records, saves the journal and writes every file
     again from the whole history, so the files are the ones one run over all
@@ -995,6 +1007,66 @@ class LiveRecorder(RunRecorder):
             for r in self._orders
             if r["status"] in ("submitted", "partially_filled") and r.get("client_order_id")
         ]
+
+    def mark_submitting(self, t: pd.Timestamp) -> None:
+        """Note, before any order of bar ``t`` goes out, the ``max_capital`` it is sized on.
+
+        ``submit.json`` holds the decision date and the config's cap. A run
+        that sends ``t``'s orders and fails before recording them leaves it
+        behind, so the rerun can tell whether the orders working at IBKR were
+        sized under the cap it sizes on (``check_adoption``).
+
+        Examples
+        --------
+        ::
+
+            recorder.check_adoption(t)  # orders found working for t
+            recorder.mark_submitting(t)
+            venue.run(strategy)
+        """
+        self.live_dir.mkdir(parents=True, exist_ok=True)
+        partial = self.live_dir / f".{_SUBMIT_FILE}.partial"
+        partial.write_text(
+            json.dumps({"decision_date": _day(t), "max_capital": self.config.max_capital}, indent=2)
+        )
+        partial.replace(self.live_dir / _SUBMIT_FILE)
+
+    def check_adoption(self, t: pd.Timestamp) -> None:
+        """Refuse to adopt ``t``'s working orders when they were sized under another cap.
+
+        The orders working at IBKR are adopted by symbol and side; the
+        rerun's orders are sized under the config's current ``max_capital``.
+        When ``submit.json`` says the earlier run of ``t`` sized them under a
+        different cap, adopting them would leave orders of the old size
+        working against a record of the new one. A directory without the
+        file for ``t`` (orders sent before it was kept) is not refused.
+
+        Raises
+        ------
+        ValueError
+            If ``t``'s orders were sent under a ``max_capital`` other than
+            the config's.
+
+        Examples
+        --------
+        ::
+
+            if working_orders:
+                recorder.check_adoption(t)
+        """
+        path = self.live_dir / _SUBMIT_FILE
+        if not path.is_file():
+            return
+        sent = json.loads(path.read_text())
+        if sent.get("decision_date") != _day(t):
+            return
+        cap = sent.get("max_capital")
+        if cap != self.config.max_capital:
+            raise ValueError(
+                f"the orders working at IBKR for {_day(t)} were sized under max_capital "
+                f"{cap!r}, the config has {self.config.max_capital!r}: cancel them at IBKR "
+                f"or restore that max_capital before deciding {_day(t)} again"
+            )
 
     def add_event(self, event: Mapping) -> None:
         """Append a live event (a hold, symbols left out, an account gap) to ``events.json``.
@@ -1119,6 +1191,8 @@ _EQUITY_FILE = "equity.zarr"
 _METRICS_FILE = "metrics.json"
 _REPORT_FILE = "report.html"
 _JOURNAL_FILE = "journal.json"
+#: The live run directory's note of the bar whose orders go out and the cap they are sized on.
+_SUBMIT_FILE = "submit.json"
 
 
 def read_config(run_dir: Path) -> dict:
@@ -1156,6 +1230,22 @@ def read_equity(run_dir: Path) -> xr.Dataset:
     """
     with xr.open_zarr(Path(run_dir) / _EQUITY_FILE) as equity:
         return equity.load()
+
+
+def read_max_capital(live_dir: Path) -> dict[pd.Timestamp, float | None]:
+    """Return the ``max_capital`` each cycle of a live run directory was sized on, by bar.
+
+    Read from its journal; a cycle recorded before the journal kept the cap
+    was sized uncapped (``None``).
+
+    Examples
+    --------
+    ::
+
+        read_max_capital(live_dir)  # {Timestamp('2026-10-14'): 480772.47, ...}
+    """
+    state = json.loads((Path(live_dir) / _JOURNAL_FILE).read_text())
+    return {pd.Timestamp(c["timestamp"]): c.get("max_capital") for c in state["cycles"]}
 
 
 def report_path(run_dir: Path) -> Path:
